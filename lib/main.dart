@@ -1,0 +1,2828 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:developer';
+import 'dart:math' show pow;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:battery_plus/battery_plus.dart';
+import 'package:http/http.dart' as http;
+import 'package:solana/solana.dart';
+import 'package:solana/encoder.dart' show SignedTx;
+
+import 'stats_db.dart';
+import 'stats_service.dart';
+import 'solscan_service.dart';
+import 'domains.dart';
+import 'wallet_auth.dart';
+import 'revoke.dart';
+import 'theme.dart';
+import 'rpc_config.dart';
+import 'base58.dart';
+import 'l10n/app_localizations.dart';
+
+const String _skrMint = 'SKRskrmtL83pcL4YqLWt6iPefDqwXQWHSw9S9vz94BZ';
+const int _skrDecimals = 9;
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final initialTheme = await _readInitialTheme();
+  runApp(DeviceStatsApp(initialTheme: initialTheme));
+}
+
+Future<DeviceStatsTheme> _readInitialTheme() async {
+  try {
+    final v = await StatsDb.instance.getMeta('theme');
+    final idx = int.tryParse(v ?? '');
+    if (idx != null && idx >= 0 && idx < DeviceStatsTheme.values.length) {
+      return DeviceStatsTheme.values[idx];
+    }
+  } catch (e) {
+    log('_readInitialTheme error: $e');
+  }
+  return DeviceStatsTheme.pipboy;
+}
+
+/// Selectable UI palettes.
+enum DeviceStatsTheme { pipboy, highContrast, light }
+
+/// Lightweight app-wide scope carrying the active palette and a setter so the
+/// header toggle can switch themes without prop drilling.
+class DeviceStatsScope extends InheritedWidget {
+  const DeviceStatsScope({
+    required this.theme,
+    required this.onThemeChanged,
+    required super.child,
+    super.key,
+  });
+
+  final DeviceStatsTheme theme;
+  final ValueChanged<DeviceStatsTheme> onThemeChanged;
+
+  static DeviceStatsScope of(BuildContext context) {
+    final scope = context
+        .dependOnInheritedWidgetOfExactType<DeviceStatsScope>();
+    assert(scope != null, 'DeviceStatsScope not found in widget tree');
+    return scope!;
+  }
+
+  @override
+  bool updateShouldNotify(DeviceStatsScope oldWidget) =>
+      theme != oldWidget.theme || onThemeChanged != oldWidget.onThemeChanged;
+}
+
+class DeviceStatsApp extends StatefulWidget {
+  const DeviceStatsApp({required this.initialTheme, super.key});
+
+  final DeviceStatsTheme initialTheme;
+
+  @override
+  State<DeviceStatsApp> createState() => _DeviceStatsAppState();
+}
+
+class _DeviceStatsAppState extends State<DeviceStatsApp> {
+  late DeviceStatsTheme _theme = widget.initialTheme;
+
+  DeviceStatsColors get _colors => switch (_theme) {
+    DeviceStatsTheme.pipboy => DeviceStatsColors.pipboy,
+    DeviceStatsTheme.highContrast => DeviceStatsColors.highContrast,
+    DeviceStatsTheme.light => DeviceStatsColors.light,
+  };
+
+  void _cycleTheme() {
+    setState(() {
+      _theme = DeviceStatsTheme
+          .values[(_theme.index + 1) % DeviceStatsTheme.values.length];
+    });
+    StatsDb.instance.setMeta('theme', '${_theme.index}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'DEVICE STATS',
+      debugShowCheckedModeBanner: false,
+      localizationsDelegates: const [
+        AppLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: AppLocalizations.supportedLocales,
+      theme: buildDeviceStatsTheme(_colors),
+      home: DeviceStatsScope(
+        theme: _theme,
+        onThemeChanged: (_) => _cycleTheme(),
+        child: const HomePage(),
+      ),
+    );
+  }
+}
+
+enum Period { day, week, month, all }
+
+enum SortKey { time, launches }
+
+/// Pure comparator for usage rows: orders by foreground time or launches,
+/// ascending or descending. Extracted for testability.
+int compareUsageRows(
+  Map<String, Object?> a,
+  Map<String, Object?> b, {
+  required SortKey key,
+  required bool desc,
+}) {
+  final int cmp;
+  if (key == SortKey.time) {
+    cmp = (a['fg_ms'] as int).compareTo(b['fg_ms'] as int);
+  } else {
+    cmp = (a['launches'] as int).compareTo(b['launches'] as int);
+  }
+  return desc ? -cmp : cmp;
+}
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
+  final Battery _battery = Battery();
+  static const MethodChannel _channel = MethodChannel('device_stats/usage');
+
+  Period _period = Period.day;
+  int _batteryLevel = -1;
+  bool _charging = false;
+  int _capacityUah = -1;
+  int _realCapacityUah = -1;
+  int _designCapacityUah = -1;
+  int _calibratedCapacityUah = -1;
+  int _currentChargeUah = -1;
+  final List<int> _capacityEstimates = [];
+  bool _batteryInfoAvailable = false;
+  String _uptime = '';
+  List<Map<String, Object?>> _rows = [];
+  bool _hasAccess = false;
+  bool _syncing = false;
+  bool _shortHistory = false;
+  int _totalFgMs = 0;
+  int _totalDrainUah = -1;
+  int _prevChargeCounterUah = -1;
+  final Map<String, String> _iconCache = {};
+  final Map<String, String> _appLabels = {};
+  SortKey _sortKey = SortKey.time;
+  bool _sortDesc = true;
+  Timer? _pollTimer;
+  static const int _refreshInterval = 60;
+  int _refreshCountdown = _refreshInterval;
+
+  // Vault / on-chain state
+  int _tab = 0; // 0 = SYSTEM, 1 = VAULT, 2 = SYSINFO, 3 = INFO
+  int _vaultSection = 0; // 0 = tokens, 1 = nfts, 2 = tx, 3 = delegations
+  Future<Map?>? _deviceInfoFuture;
+  final TextEditingController _addressController = TextEditingController();
+  String? _walletAddress;
+  String? _walletLabel;
+  bool _vaultBusy = false;
+  bool _revokeBusy = false;
+  int _solLamports = -1;
+  double _totalUsd = 0;
+  bool _pricesUnavailable = false;
+  List<TokenAccountInfo> _tokenAccounts = [];
+  List<AssetInfo> _assets = [];
+  List<TxInfo> _txs = [];
+  Map<String, TxDetail> _txDetails = {};
+  String _vaultError = '';
+  String _vaultSuccess = '';
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _checkAccess();
+    _restoreWallet();
+    _loadPrefs().then((_) => _refresh());
+    _deviceInfoFuture = StatsService.getDeviceInfo();
+    StatsService.scheduleSync();
+    _pollTimer = Timer.periodic(Duration(seconds: 1), (_) => _pollTick());
+  }
+
+  void _pollTick() {
+    _refreshCountdown--;
+    if (_refreshCountdown <= 0) {
+      _refreshCountdown = _refreshInterval;
+      _syncAndRefresh();
+    }
+    if (mounted) setState(() {});
+  }
+
+  void _resetRefreshTimer() {
+    _refreshCountdown = _refreshInterval;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAccess();
+      _syncAndRefresh();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
+    _addressController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkAccess() async {
+    final v = await StatsService.instance.hasUsageAccess();
+    if (mounted) setState(() => _hasAccess = v);
+  }
+
+  Future<void> _loadPrefs() async {
+    final period = await StatsDb.instance.getMeta('period');
+    if (period != null && mounted) {
+      final idx = int.tryParse(period);
+      if (idx != null && idx >= 0 && idx < Period.values.length) {
+        _period = Period.values[idx];
+      }
+    }
+    final sortKey = await StatsDb.instance.getMeta('sort_key');
+    if (sortKey != null && mounted) {
+      final idx = int.tryParse(sortKey);
+      if (idx != null && idx >= 0 && idx < SortKey.values.length) {
+        _sortKey = SortKey.values[idx];
+      }
+    }
+    final sortDesc = await StatsDb.instance.getMeta('sort_desc');
+    if (sortDesc != null && mounted) {
+      _sortDesc = sortDesc == '1';
+    }
+    final tab = await StatsDb.instance.getMeta('tab');
+    if (tab != null && mounted) {
+      _tab = int.tryParse(tab) ?? 0;
+    }
+    final calibrated = await StatsDb.instance.getMeta('battery_calibrated_capacity_uah');
+    if (calibrated != null) {
+      _calibratedCapacityUah = int.tryParse(calibrated) ?? -1;
+    }
+    // Load vault data from database if wallet is connected.
+    if (_walletAddress != null) {
+      try {
+        final accounts = await StatsDb.instance.loadVaultTokenAccounts(_walletAddress!);
+        final assets = await StatsDb.instance.loadVaultAssets(_walletAddress!);
+        final txs = await StatsDb.instance.loadVaultTxs(_walletAddress!);
+        if (mounted) {
+          setState(() {
+            _tokenAccounts = accounts
+                .map((a) {
+                      final info = TokenAccountInfo(
+                        mint: a['mint'] as String,
+                        owner: a['owner'] as String,
+                        amount: a['amount'] as int,
+                        delegate: a['delegate'] as String?,
+                        state: a['state'] as int,
+                        delegatedAmount: a['delegated_amount'] as int,
+                        closeAuthority: a['close_authority'] as String?,
+                        isNative: a['is_native'] == 1,
+                        nativeAmount: a['native_amount'] as int,
+                      );
+                      info.pubkey = a['pubkey'] as String;
+                      return info;
+                    })
+                .toList();
+            _assets = assets
+                .map((a) => AssetInfo(
+                      id: a['id'] as String,
+                      interface: a['interface'] as String,
+                      name: a['name'] as String,
+                      symbol: a['symbol'] as String,
+                      balance: a['balance'] as String,
+                      decimals: a['decimals'] as int,
+                      burnt: a['burnt'] == 1,
+                      compressed: a['compressed'] == 1,
+                    ))
+                .toList();
+            _txs = txs
+                .map((t) => TxInfo(
+                      signature: t['signature'] as String,
+                      slot: t['slot'] as int,
+                      err: t['err'],
+                      blockTime: t['block_time'] as int,
+                      memo: t['memo'] as String?,
+                    ))
+                .toList();
+          });
+        }
+      } catch (e) {
+        log('Failed to load vault data: $e');
+      }
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _manualRefresh() async {
+    _resetRefreshTimer();
+    await _syncAndRefresh();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _syncAndRefresh() async {
+    if (_syncing) return;
+    _syncing = true;
+    try {
+      try {
+        await StatsService.instance.sync();
+      } catch (e) {
+        log('StatsService.sync error: $e');
+      }
+      await _readBattery();
+      await _readUptime();
+      await _loadRows();
+      _deviceInfoFuture = StatsService.getDeviceInfo();
+    } finally {
+      _syncing = false;
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refresh() async {
+    await _readBattery();
+    await _readUptime();
+    await _loadRows();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _readBattery() async {
+    try {
+      final lvl = await _battery.batteryLevel;
+      final charging = await _battery.batteryState;
+      _batteryLevel = lvl;
+      _charging =
+          charging == BatteryState.charging || charging == BatteryState.full;
+    } catch (e) {
+      log('_readBattery error: $e');
+    }
+    await _sampleBattery();
+  }
+
+  Future<void> _sampleBattery() async {
+    try {
+      final info = await StatsService.readBatteryInfo();
+      if (info == null) return;
+
+      final designCap = info['designCapacityUah'];
+      if (designCap is int && designCap > 0) {
+        _designCapacityUah = designCap;
+        StatsDb.instance.setMeta('battery_design_capacity_uah', '$designCap');
+      } else {
+        final cached = await StatsDb.instance.getMeta('battery_design_capacity_uah');
+        if (cached != null) _designCapacityUah = int.tryParse(cached) ?? -1;
+      }
+
+      final counter = info['chargeCounterUah'];
+      final scale = info['scale'];
+      final level = info['level'];
+      if (counter is int &&
+          counter > 0 &&
+          scale is int &&
+          scale > 0 &&
+          level is int &&
+          level > 0) {
+        final estimate = (counter * scale / level).round();
+        _capacityEstimates.add(estimate);
+        if (_capacityEstimates.length > 20) _capacityEstimates.removeAt(0);
+        final sorted = [..._capacityEstimates]..sort();
+        final mid = sorted.length ~/ 2;
+        _realCapacityUah = sorted.length.isEven
+            ? ((sorted[mid - 1] + sorted[mid]) / 2).round()
+            : sorted[mid];
+        StatsDb.instance.setMeta('battery_real_capacity_uah', '$_realCapacityUah');
+      } else {
+        final cached = await StatsDb.instance.getMeta('battery_real_capacity_uah');
+        if (cached != null) _realCapacityUah = int.tryParse(cached) ?? -1;
+      }
+
+      final full = info['chargeFullUah'];
+      if (full is int && full > 0) {
+        _capacityUah = full;
+        StatsDb.instance.setMeta('battery_capacity_uah', '$full');
+      } else {
+        final cached = await StatsDb.instance.getMeta('battery_capacity_uah');
+        if (cached != null) _capacityUah = int.tryParse(cached) ?? -1;
+      }
+
+      if (counter is int && counter > 0) {
+        if (_prevChargeCounterUah > 0) {
+          final delta = _prevChargeCounterUah - counter;
+          if (delta > 0) {
+            _totalDrainUah = delta;
+          }
+        }
+        _prevChargeCounterUah = counter;
+      }
+
+      final effCap = _effectiveCapacityUah;
+      if (_batteryLevel >= 0 && effCap > 0) {
+        _currentChargeUah = (effCap * _batteryLevel / 100).round();
+      } else if (counter is int) {
+        _currentChargeUah = counter;
+      }
+
+      _batteryInfoAvailable = true;
+    } catch (e) {
+      log('_sampleBattery error: $e');
+    }
+  }
+
+  int get _effectiveCapacityUah {
+    if (_calibratedCapacityUah > 0) return _calibratedCapacityUah;
+    if (_designCapacityUah > 0) return _designCapacityUah;
+    if (_realCapacityUah > 0) return _realCapacityUah;
+    if (_capacityUah > 0) return _capacityUah;
+    return -1;
+  }
+
+  Future<void> _readUptime() async {
+    try {
+      final ms = await _channel.invokeMethod<int>('getUptimeMs');
+      if (ms != null) {
+        _uptime = _fmtUptime(ms / 1000.0);
+      } else {
+        _uptime = '...';
+      }
+    } catch (e) {
+      log('_readUptime error: $e');
+      _uptime = '...';
+    }
+  }
+
+  String _fmtUptime(double sec) {
+    final h = sec ~/ 3600;
+    final d = h ~/ 24;
+    final m = (sec ~/ 60) % 60;
+    if (d > 0) return '${d}d ${h % 24}h ${m}m';
+    if (h > 0) return '${h}h ${m}m';
+    return '${m}m';
+  }
+
+  int _periodStartMs() {
+    final now = DateTime.now();
+    switch (_period) {
+      case Period.day:
+        return DateTime(now.year, now.month, now.day).millisecondsSinceEpoch;
+      case Period.week:
+        final dow = now.weekday;
+        final start = now.subtract(Duration(days: dow - 1));
+        return DateTime(
+          start.year,
+          start.month,
+          start.day,
+        ).millisecondsSinceEpoch;
+      case Period.month:
+        return DateTime(now.year, now.month, 1).millisecondsSinceEpoch;
+      case Period.all:
+        return 0;
+    }
+  }
+
+  Future<void> _loadRows() async {
+    final rows = await StatsService.usageSince(_periodStartMs());
+    if (_appLabels.isEmpty) {
+      try {
+        final pm = await _channel.invokeListMethod<Map>('installedApps');
+        if (pm != null) {
+          for (final a in pm) {
+            _appLabels[a['package'] as String] = (a['label'] as String?) ?? '';
+          }
+        }
+      } catch (e) {
+        log('_loadRows installedApps error: $e');
+      }
+    }
+    final appList = rows.map((r) {
+      final pkg = r['package'] as String;
+      return <String, Object?>{
+        'package': pkg,
+        'label': _appLabels[pkg] ?? pkg,
+        'fg_ms': r['fg_ms'],
+        'launches': r['launches'],
+      };
+    }).toList();
+    _sortRows(appList);
+    // Sum total foreground time for the screen-time metric + bar scaling.
+    _totalFgMs = 0;
+    for (final r in appList) {
+      _totalFgMs += (r['fg_ms'] as int?) ?? 0;
+    }
+    final capacityForEstimate = _effectiveCapacityUah;
+    for (final r in appList) {
+      final fg = (r['fg_ms'] as int?) ?? 0;
+      final share = _totalFgMs > 0 ? fg / _totalFgMs : 0.0;
+      r['drain_pct'] = share * 100.0;
+      if (capacityForEstimate > 0) {
+        r['drain_mah'] = (capacityForEstimate * share) / 1000.0;
+      } else {
+        r['drain_mah'] = (_totalDrainUah * share) / 1000.0;
+      }
+    }
+    var shortHistory = false;
+    if (_period != Period.day && appList.isNotEmpty) {
+      final start = _periodStartMs();
+      final earliest = await StatsDb.instance.earliestEventTs();
+      shortHistory = earliest != null && earliest > start;
+    }
+    if (!mounted) return;
+    setState(() {
+      _rows = appList;
+      _shortHistory = shortHistory;
+    });
+  }
+
+  void _sortRows(List<Map<String, Object?>> list) {
+    list.sort((a, b) => compareUsageRows(a, b, key: _sortKey, desc: _sortDesc));
+  }
+
+  String _fmtDuration(int ms) {
+    final s = ms ~/ 1000;
+    if (s < 60) return '${s}s';
+    final m = s ~/ 60;
+    if (m < 60) return '${m}m';
+    final h = m ~/ 60;
+    if (h < 24) return '${h}h ${m % 60}m';
+    final d = h ~/ 24;
+    return '${d}d ${h % 24}h';
+  }
+
+  Future<void> _openUsageSettings() async {
+    await _channel.invokeMethod('openUsageSettings');
+    Future.delayed(const Duration(seconds: 1), _checkAccess);
+  }
+
+  void _cycleTheme() {
+    DeviceStatsScope.of(context)
+        .onThemeChanged(DeviceStatsScope.of(context).theme);
+  }
+
+  Future<void> _resetPackage(String pkg) async {
+    await StatsDb.instance.resetPackage(pkg);
+    await _loadRows();
+  }
+
+  Future<void> _resetGroup() async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    final pkgs = await StatsDb.instance.allPackages();
+    if (!mounted) return;
+    final selected = <String>{};
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          backgroundColor: ds.bg,
+          title: Text(l10n.resetGroup, style: TextStyle(color: ds.primary)),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 300,
+            child: ListView(
+              children: pkgs.map((p) {
+                return CheckboxListTile(
+                  activeColor: ds.primary,
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(p, style: TextStyle(color: ds.primary)),
+                  value: selected.contains(p),
+                  onChanged: (v) {
+                    setDialogState(() {
+                      if (v == true) {
+                        selected.add(p);
+                      } else {
+                        selected.remove(p);
+                      }
+                    });
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                if (selected.isNotEmpty) {
+                  StatsDb.instance.resetPackages(selected.toList());
+                  _loadRows();
+                }
+              },
+              child: Text(l10n.reset, style: TextStyle(color: ds.primary)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<String> _iconFor(String pkg) async {
+    final cached = _iconCache[pkg];
+    if (cached != null) return cached;
+    final b64 = await StatsService.getAppIconBase64(pkg);
+    if (_iconCache.length > 512) _iconCache.clear();
+    _iconCache[pkg] = b64;
+    return b64;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Scaffold(
+      backgroundColor: ds.bg,
+      body: Stack(
+        children: [
+          // Main content
+          SafeArea(
+            child: Column(
+              children: [
+                _header(),
+                _tabSwitch(),
+                if (_tab == 0) ...[
+                  _metricsRow(),
+                  _screenTimeBar(),
+                  SizedBox(height: 12),
+                  _periodSwitch(),
+                  SizedBox(height: 6),
+                  if (_shortHistory)
+                    Container(
+                      width: double.infinity,
+                      margin: EdgeInsets.symmetric(horizontal: 12),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: ds.hintBg,
+                        border: Border.all(color: ds.dark),
+                      ),
+                      child: Text(
+                        l10n.shortHistory,
+                        style: TextStyle(
+                          color: ds.dim,
+                          fontSize: 15,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  SizedBox(height: 12),
+                  if (!_hasAccess) _accessHint(),
+                  if (_hasAccess) _sortHeader(),
+                  Expanded(
+                    child: _rows.isEmpty
+                        ? Center(
+                            child: Text(
+                              l10n.noDataYet,
+                              style: TextStyle(color: ds.dim, letterSpacing: 2),
+                            ),
+                          )
+                        : _appList(),
+                  ),
+                ] else if (_tab == 1)
+                  Expanded(child: _vaultTab())
+                else if (_tab == 2)
+                  Expanded(child: _sysInfoTab())
+                else
+                  Expanded(child: _infoTab()),
+              ],
+            ),
+          ),
+          // CRT scanlines overlay
+          IgnorePointer(child: _Scanlines()),
+        ],
+      ),
+    );
+  }
+
+  // ---- Header (Pip-Boy title bar) ----
+  Widget _header() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: ds.dark,
+        border: Border(bottom: BorderSide(color: ds.primary, width: 2)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                l10n.headerTitle,
+                maxLines: 1,
+                style: TextStyle(
+                  color: ds.primary,
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
+              ),
+            ),
+          ),
+          SizedBox(width: 8),
+          _cornerButton(Icons.palette_outlined, _cycleTheme),
+          _cornerButton(Icons.refresh, _manualRefresh),
+          _cornerButton(Icons.delete_sweep, _resetGroup),
+          _cornerButton(Icons.attach_money_outlined, _showTipModal),
+        ],
+      ),
+    );
+  }
+
+  Widget _cornerButton(IconData icon, VoidCallback onTap) {
+    final ds = context.ds;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: EdgeInsets.only(left: 6),
+        padding: EdgeInsets.all(5),
+        decoration: BoxDecoration(
+          border: Border.all(color: ds.primary, width: 1),
+          color: ds.dark,
+        ),
+        child: Icon(icon, color: ds.primary, size: 17),
+      ),
+    );
+  }
+
+  // ---- Tab switch (SYSTEM / VAULT / SYSINFO / INFO) ----
+  Widget _tabSwitch() {
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Row(
+        children: [
+          _tabButton(l10n.systemTab, 0),
+          SizedBox(width: 6),
+          _tabButton(l10n.vaultTab, 1),
+          SizedBox(width: 6),
+          _tabButton(l10n.sysInfoTab, 2),
+          SizedBox(width: 6),
+          _tabButton(l10n.infoTab, 3),
+        ],
+      ),
+    );
+  }
+
+  Widget _tabButton(String label, int idx) {
+    final ds = context.ds;
+    final active = _tab == idx;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          setState(() => _tab = idx);
+          StatsDb.instance.setMeta('tab', '$idx');
+        },
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: 8),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? ds.primary : Colors.transparent,
+            border: Border.all(color: ds.primary, width: 1),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: active ? ds.bg : ds.primary,
+              fontSize: 16,
+              letterSpacing: 2,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- Vault tab (on-chain security) ----
+  Widget _vaultTab() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Wallet address entry + scan header
+        Container(
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: ds.panel,
+            border: Border.all(color: ds.primary, width: 1),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.seedVault,
+                style: TextStyle(
+                  color: ds.primary,
+                  fontSize: 20,
+                  letterSpacing: 2,
+                ),
+              ),
+              SizedBox(height: 8),
+              if (_walletAddress == null) ...[
+                Text(
+                  l10n.connectSeedVault,
+                  style: TextStyle(color: ds.dim, fontSize: 14),
+                ),
+                SizedBox(height: 10),
+                _vaultActionButton(
+                  l10n.connectSeedVaultBtn,
+                  _vaultBusy,
+                  _authorize,
+                ),
+                SizedBox(height: 8),
+                TextField(
+                  controller: _addressController,
+                  style: TextStyle(color: ds.primary, fontSize: 15),
+                  decoration: InputDecoration(
+                    hintText: l10n.addressHint,
+                    hintStyle: TextStyle(color: ds.dark, fontSize: 14),
+                    enabledBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: ds.dark, width: 1),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderSide: BorderSide(color: ds.primary, width: 1),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 10),
+                _vaultActionButton(l10n.scanWallet, _vaultBusy, _scanManual),
+              ] else ...[
+                Text(
+                  l10n.addrLabel(_walletAddress!),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: ds.primary, fontSize: 14),
+                ),
+                if (_walletLabel != null)
+                  Text(
+                    l10n.walletLabel(_walletLabel!),
+                    style: TextStyle(color: ds.dim, fontSize: 13),
+                  ),
+                SizedBox(height: 8),
+                Text(
+                  l10n.solBalance(
+                    _solLamports < 0
+                        ? '...'
+                        : '${(_solLamports / 1e9).toStringAsFixed(4)} SOL',
+                  ),
+                  style: TextStyle(color: ds.primary, fontSize: 18),
+                ),
+                if (_totalUsd > 0)
+                  Text(
+                    l10n.estValue(_totalUsd.toStringAsFixed(2)),
+                    style: TextStyle(color: ds.dim, fontSize: 15),
+                  ),
+                if (_pricesUnavailable)
+                  Text(
+                    l10n.pricesUnavailable,
+                    style: TextStyle(color: ds.dim, fontSize: 13),
+                  ),
+                if (!dasAvailable)
+                  Text(
+                    l10n.metadataUnavailable,
+                    style: TextStyle(color: ds.dim, fontSize: 13),
+                  ),
+                SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _vaultActionButton(
+                        l10n.rescan,
+                        _vaultBusy,
+                        _loadVaultData,
+                      ),
+                    ),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: _vaultActionButton(
+                        l10n.remove,
+                        false,
+                        _removeWallet,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (_vaultError.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    _vaultError,
+                    style: TextStyle(color: ds.dangerBorder, fontSize: 13),
+                  ),
+                ),
+              if (_vaultSuccess.isNotEmpty)
+                Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text(
+                    _vaultSuccess,
+                    style: TextStyle(color: ds.primary, fontSize: 13),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        SizedBox(height: 10),
+
+        // Sub-tabs: TOKENS / NFT / TX / DELEGATIONS
+        Padding(
+          padding: EdgeInsets.only(top: 2),
+          child: Row(
+            children: [
+              _vaultTabButton(l10n.tabTokens, 0),
+              SizedBox(width: 6),
+              _vaultTabButton(l10n.tabNfts, 1),
+              SizedBox(width: 6),
+              _vaultTabButton(l10n.tabTx, 2),
+              SizedBox(width: 6),
+              _vaultTabButton(l10n.tabDelegations, 3),
+            ],
+          ),
+        ),
+        SizedBox(height: 10),
+
+        // Active section (scrollable)
+        Expanded(child: _activeVaultSection()),
+
+        // Privacy policy
+        _privacySection(),
+      ],
+    );
+  }
+
+  Widget _vaultTabButton(String label, int idx) {
+    final ds = context.ds;
+    final active = _vaultSection == idx;
+    return Expanded(
+      child: GestureDetector(
+        onTap: () => setState(() => _vaultSection = idx),
+        child: Container(
+          padding: EdgeInsets.symmetric(vertical: 6),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: active ? ds.primary : Colors.transparent,
+            border: Border.all(color: ds.primary, width: 1),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: active ? ds.bg : ds.primary,
+              fontSize: 15,
+              letterSpacing: 1,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _activeVaultSection() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    switch (_vaultSection) {
+      case 0:
+        return ListView(
+          children: [
+            Text(
+              l10n.tokens,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            SizedBox(height: 6),
+            ..._buildTokenList(),
+          ],
+        );
+      case 1:
+        return ListView(
+          children: [
+            Text(
+              l10n.nfts,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            SizedBox(height: 6),
+            ..._buildNftList(),
+          ],
+        );
+      case 2:
+        return ListView(
+          children: [
+            Text(
+              l10n.transactions,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            SizedBox(height: 6),
+            ..._buildTxList(),
+          ],
+        );
+      case 3:
+        return ListView(
+          children: [
+            Text(
+              l10n.delegations,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            SizedBox(height: 6),
+            if (_walletAddress == null)
+              Text(
+                l10n.connectWalletToScan,
+                style: TextStyle(color: ds.dim, fontSize: 14),
+              )
+            else if (_tokenAccounts.isEmpty && _vaultBusy)
+              Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: 14))
+            else if (_tokenAccounts.isEmpty)
+              Text(
+                l10n.noActiveDelegations,
+                style: TextStyle(color: ds.dim, fontSize: 14),
+              )
+            else
+              ..._tokenAccounts
+                  .where((t) => t.hasDelegate)
+                  .map((t) => _delegationRow(t)),
+            SizedBox(height: 14),
+            Text(
+              l10n.closeAuthority,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            SizedBox(height: 6),
+            ..._buildCloseAuthorityList(),
+            SizedBox(height: 14),
+            _revokeSection(),
+          ],
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  List<Widget> _buildTokenList() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    if (_walletAddress == null) return [];
+    final tokens = _assets
+        .where((a) => a.isFungible && a.uiAmount != '0')
+        .toList();
+    if (tokens.isEmpty && !_vaultBusy) {
+      return [
+        Text(l10n.noTokens, style: TextStyle(color: ds.dim, fontSize: 14)),
+      ];
+    }
+    return tokens.map((a) {
+      final sym = a.symbol.isNotEmpty
+          ? a.symbol
+          : (a.name.isNotEmpty ? a.name : a.id);
+      return Container(
+        margin: EdgeInsets.only(bottom: 4),
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: ds.panel,
+          border: Border.all(color: ds.dark, width: 1),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                sym,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: ds.primary, fontSize: 14),
+              ),
+            ),
+            Text(a.uiAmount, style: TextStyle(color: ds.primary, fontSize: 14)),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  List<Widget> _buildNftList() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    if (_walletAddress == null) return [];
+    final nfts = _assets.where((a) => !a.isFungible && !a.burnt).toList();
+    final spamCount = _assets.where((a) => !a.isFungible && a.burnt).length;
+    if (nfts.isEmpty && !_vaultBusy) {
+      return [Text(l10n.noNfts, style: TextStyle(color: ds.dim, fontSize: 14))];
+    }
+    // Cap display to avoid a huge list; show count + first several names.
+    final count = nfts.length;
+    final shown = nfts.take(20).toList();
+    final widgets = <Widget>[];
+    for (final a in shown) {
+      final name = a.name.isNotEmpty
+          ? a.name
+          : (a.symbol.isNotEmpty ? a.symbol : l10n.unnamed);
+      widgets.add(
+        Padding(
+          padding: EdgeInsets.only(bottom: 2),
+          child: Text('• $name', style: TextStyle(color: ds.dim, fontSize: 13)),
+        ),
+      );
+    }
+    if (count > shown.length) {
+      widgets.add(
+        Text(
+          l10n.moreCount(count - shown.length),
+          style: TextStyle(color: ds.dark, fontSize: 13),
+        ),
+      );
+    }
+    if (spamCount > 0) {
+      widgets.add(
+        Text(
+          l10n.spamHidden(spamCount),
+          style: TextStyle(
+            color: ds.dangerText,
+            fontSize: 12,
+            letterSpacing: 1,
+          ),
+        ),
+      );
+    }
+    return widgets;
+  }
+
+  List<Widget> _buildCloseAuthorityList() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    if (_walletAddress == null) return [];
+    final risky = _tokenAccounts
+        .where((t) => !t.hasDelegate && t.hasCloseAuthority)
+        .toList();
+    if (risky.isEmpty && !_vaultBusy) {
+      return [
+        Text(
+          l10n.noCloseAuthorityRisks,
+          style: TextStyle(color: ds.dim, fontSize: 14),
+        ),
+      ];
+    }
+    return risky.map((t) {
+      return Container(
+        margin: EdgeInsets.only(bottom: 8),
+        padding: EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: ds.dangerBg,
+          border: Border.all(color: ds.dangerBorder, width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              l10n.accountLabel(t.pubkey),
+              style: TextStyle(
+                color: ds.dangerText,
+                fontSize: 12,
+                letterSpacing: 1,
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              l10n.closeAuthorityLabel(t.closeAuthority ?? ''),
+              style: TextStyle(
+                color: ds.dangerTextStrong,
+                fontSize: 12,
+                letterSpacing: 1,
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              l10n.closeAuthorityWarning,
+              style: TextStyle(color: ds.dim, fontSize: 13),
+            ),
+          ],
+        ),
+      );
+    }).toList();
+  }
+
+  List<Widget> _buildTxList() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    if (_walletAddress == null) return [];
+    if (_txs.isEmpty && !_vaultBusy) {
+      return [
+        Text(
+          l10n.noTransactions,
+          style: TextStyle(color: ds.dim, fontSize: 14),
+        ),
+      ];
+    }
+    return _txs.map((t) {
+      final timeStr = t.blockTime > 0
+          ? _formatBlockTime(t.blockTime)
+          : l10n.txSlot(t.slot);
+      final sig = t.signature.length > 16
+          ? '${t.signature.substring(0, 16)}…'
+          : t.signature;
+      final color = t.hasError ? ds.dangerTextStrong : ds.primary;
+      final status = t.hasError ? l10n.statusFailed : l10n.statusOk;
+      final detail = _txDetails[t.signature];
+
+      final lines = <Widget>[
+        Text(
+          l10n.txStatusSig(status, sig),
+          style: TextStyle(color: color, fontSize: 13, letterSpacing: 1),
+        ),
+        Text(
+          '        $timeStr',
+          style: TextStyle(color: ds.dim, fontSize: 12),
+        ),
+      ];
+
+      if (detail != null) {
+        // Fee
+        if (detail.feeLamports > 0) {
+          lines.add(
+            Text(
+              l10n.feeSol(detail.feeSol),
+              style: TextStyle(color: ds.dim, fontSize: 12),
+            ),
+          );
+        }
+        // Program labels (deduplicated)
+        if (detail.programLabels.isNotEmpty) {
+          lines.add(
+            Text(
+              l10n.protoLabel(detail.programLabels.join(', ')),
+              style: TextStyle(color: ds.dim, fontSize: 12),
+            ),
+          );
+        }
+        // SOL (native) transfers
+        for (final sol in detail.solTransfers) {
+          final dest = _shortAddr(sol.destination);
+          lines.add(
+            Text(
+              l10n.solTransfer(dest, sol.solAmount),
+              style: TextStyle(color: ds.dim, fontSize: 12),
+            ),
+          );
+        }
+        // SPL token transfers
+        for (final tr in detail.transfers) {
+          final dest = _shortAddr(tr.destination);
+          lines.add(
+            Text(
+              l10n.tokenTransfer(dest, tr.amount),
+              style: TextStyle(color: ds.dim, fontSize: 12),
+            ),
+          );
+        }
+      }
+
+      return Padding(
+        padding: EdgeInsets.only(bottom: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: lines,
+        ),
+      );
+    }).toList();
+  }
+
+  String _shortAddr(String address) {
+    if (address.isEmpty) return '?';
+    return address.length > 12 ? '${address.substring(0, 12)}…' : address;
+  }
+
+  String _formatBlockTime(int unixSeconds) {
+    final l10n = AppLocalizations.of(context);
+    final dt = DateTime.fromMillisecondsSinceEpoch(unixSeconds * 1000);
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return l10n.timeJustNow;
+    if (diff.inHours < 1) return l10n.timeMinutesAgo(diff.inMinutes);
+    if (diff.inDays < 1) return l10n.timeHoursAgo(diff.inHours);
+    return l10n.timeDaysAgo(diff.inDays);
+  }
+
+  Widget _delegationRow(TokenAccountInfo t) {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      margin: EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: ds.dangerBg,
+        border: Border.all(color: ds.dangerBorder, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.accountLabel(t.pubkey),
+            style: TextStyle(
+              color: ds.dangerText,
+              fontSize: 12,
+              letterSpacing: 1,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            l10n.mintLabel(t.mint),
+            style: TextStyle(
+              color: ds.dangerText,
+              fontSize: 13,
+              letterSpacing: 1,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            l10n.delegateLabel(t.delegate ?? ''),
+            style: TextStyle(
+              color: ds.dangerTextStrong,
+              fontSize: 12,
+              letterSpacing: 1,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            l10n.approvedAmountLabel(t.delegatedAmount),
+            style: TextStyle(color: ds.primary, fontSize: 15),
+          ),
+          SizedBox(height: 8),
+          _vaultActionButton('REVOKE', _revokeBusy, () => _revokeDelegation(t)),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _revokeDelegation(TokenAccountInfo t) async {
+    final l10n = AppLocalizations.of(context);
+    if (_walletAddress == null) return;
+    setState(() {
+      _revokeBusy = true;
+      _vaultError = '';
+      _vaultSuccess = '';
+    });
+    try {
+      final sig = await RevokeService.instance.revoke(
+        ownerAddress: _walletAddress!,
+        tokenAccount: t.pubkey,
+      );
+      if (!mounted) return;
+      setState(() {
+        _revokeBusy = false;
+        _vaultError = '';
+      });
+      // Rescan delegations to reflect the change.
+      await _loadVaultData();
+      // Surface a success note.
+      if (!mounted) return;
+      setState(() {
+        _vaultSuccess = l10n.revokedOk('${sig.substring(0, 16)}…');
+      });
+      await Future.delayed(Duration(seconds: 4));
+      if (mounted) {
+        setState(() => _vaultSuccess = '');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _revokeBusy = false;
+        _vaultError = l10n.revokeError(e);
+      });
+    }
+  }
+
+  Widget _revokeSection() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ds.panel,
+        border: Border.all(color: ds.dark, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.revokeSection,
+            style: TextStyle(color: ds.primary, fontSize: 20, letterSpacing: 2),
+          ),
+          SizedBox(height: 6),
+          Text(
+            l10n.revokeClearsHint,
+            style: TextStyle(color: ds.dim, fontSize: 13, letterSpacing: 1),
+          ),
+          SizedBox(height: 4),
+          Text(
+            l10n.revokeDisclaimer,
+            style: TextStyle(color: ds.dim, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _privacySection() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ds.panel,
+        border: Border.all(color: ds.dark, width: 1),
+      ),
+      child: GestureDetector(
+        onTap: _showPrivacy,
+        child: Row(
+          children: [
+            Text(
+              l10n.privacy,
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 20,
+                letterSpacing: 2,
+              ),
+            ),
+            Spacer(),
+            Text(l10n.tapToView, style: TextStyle(color: ds.dim, fontSize: 14)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPrivacy() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        title: Text(
+          l10n.privacyPolicy,
+          style: TextStyle(color: ds.primary, fontSize: 20),
+        ),
+        content: SingleChildScrollView(
+          child: Text(
+            l10n.privacyBody,
+            style: TextStyle(color: ds.dim, fontSize: 15),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(l10n.close, style: TextStyle(color: ds.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _vaultActionButton(String label, bool busy, VoidCallback onTap) {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: busy ? ds.dark : ds.primary,
+          border: Border.all(color: ds.primary, width: 1),
+        ),
+        child: Text(
+          busy ? l10n.pleaseWait : label,
+          style: TextStyle(
+            color: busy ? ds.primary : ds.bg,
+            fontSize: 15,
+            letterSpacing: 1,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _authorize() async {
+    final l10n = AppLocalizations.of(context);
+    setState(() {
+      _vaultBusy = true;
+      _vaultError = '';
+    });
+    try {
+      final auth = await WalletAuthService.instance.authorize();
+      if (!mounted) return;
+      if (auth == null) {
+        setState(() {
+          _vaultBusy = false;
+          _vaultError = l10n.seedVaultUnavailable;
+        });
+        return;
+      }
+      setState(() {
+        _walletAddress = auth.address;
+        _walletLabel = auth.accountLabel;
+        _vaultBusy = false;
+      });
+      await _loadVaultData();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _vaultBusy = false;
+        _vaultError = l10n.authError(e);
+      });
+    }
+  }
+
+  Future<void> _scanManual() async {
+    final l10n = AppLocalizations.of(context);
+    final input = _addressController.text.trim();
+    if (WalletAuthService.isSkrDomain(input)) {
+      setState(() {
+        _vaultBusy = true;
+        _vaultError = '';
+      });
+      String? address;
+      try {
+        address = await SkrResolver.instance.resolve(input);
+      } catch (e) {
+        log('SkrResolver error: $e');
+        address = null;
+      }
+      if (!mounted) return;
+      if (address == null) {
+        setState(() {
+          _vaultBusy = false;
+          _vaultError = l10n.domainNotFound;
+        });
+        return;
+      }
+      setState(() {
+        _walletAddress = address;
+        _walletLabel = input;
+        _vaultBusy = false;
+        _vaultError = '';
+      });
+      await _loadVaultData();
+      return;
+    }
+    final auth = WalletAuthService.instance.fromManual(input);
+    if (auth == null) {
+      setState(() {
+        _vaultError = l10n.invalidAddress;
+      });
+      return;
+    }
+    setState(() {
+      _walletAddress = auth.address;
+      _walletLabel = auth.accountLabel;
+      _vaultError = '';
+    });
+    await _loadVaultData();
+  }
+
+  Future<void> _loadVaultData() async {
+    final l10n = AppLocalizations.of(context);
+    final addr = _walletAddress;
+    if (addr == null) return;
+    setState(() {
+      _vaultBusy = true;
+      _vaultError = '';
+    });
+    try {
+      final (lamports, accounts, assets, txs) = await (
+        SolScanService.instance.getBalanceLamports(addr),
+        SolScanService.instance.scanDelegates(addr),
+        SolScanService.instance.getAssets(addr),
+        SolScanService.instance.getSignatures(addr, limit: 10),
+      ).wait;
+      // Estimate portfolio value from Jupiter prices (best-effort).
+      final mints = <String>[
+        SolScanService.solMint,
+        ...assets.where((a) => a.isFungible).map((a) => a.id),
+      ];
+      final prices = await SolScanService.instance.getPrices(mints);
+      final totalUsd = prices == null
+          ? 0.0
+          : _estimateUsd(lamports, assets, prices);
+      if (!mounted) return;
+      setState(() {
+        _solLamports = lamports;
+        _totalUsd = totalUsd;
+        _pricesUnavailable = prices == null;
+        _tokenAccounts = accounts;
+        _assets = assets;
+        _txs = txs;
+        _vaultBusy = false;
+      });
+      // Persist vault data to database.
+      try {
+        await StatsDb.instance.saveVaultTokenAccounts(addr, accounts
+            .map((a) => {
+                  'pubkey': a.pubkey,
+                  'mint': a.mint,
+                  'owner': a.owner,
+                  'amount': a.amount,
+                  'delegate': a.delegate,
+                  'state': a.state,
+                  'delegatedAmount': a.delegatedAmount,
+                  'closeAuthority': a.closeAuthority,
+                  'isNative': a.isNative,
+                  'nativeAmount': a.nativeAmount,
+                })
+            .toList());
+        await StatsDb.instance.saveVaultAssets(addr, assets
+            .map((a) => {
+                  'id': a.id,
+                  'interface': a.interface,
+                  'name': a.name,
+                  'symbol': a.symbol,
+                  'balance': a.balance,
+                  'decimals': a.decimals,
+                  'burnt': a.burnt,
+                  'compressed': a.compressed,
+                })
+            .toList());
+        await StatsDb.instance.saveVaultTxs(addr, txs
+            .map((t) => {
+                  'signature': t.signature,
+                  'slot': t.slot,
+                  'err': t.err,
+                  'blockTime': t.blockTime,
+                  'memo': t.memo,
+                })
+            .toList(), {
+          for (var e in _txDetails.entries)
+            e.key: {
+              'feeLamports': e.value.feeLamports,
+              'programs': e.value.programs,
+              'transfers': e.value.transfers.map((t) => {
+                    'mint': t.mint,
+                    'amount': t.amount,
+                    'destination': t.destination,
+                    'source': t.source,
+                  }).toList(),
+              'solTransfers': e.value.solTransfers.map((t) => {
+                    'destination': t.destination,
+                    'source': t.source,
+                    'lamports': t.lamports,
+                  }).toList(),
+            }
+        });
+      } catch (e) {
+        log('Failed to save vault data: $e');
+      }
+      // Enrich first several transactions with fee/program/transfer details.
+      final details = <String, TxDetail>{};
+      final toFetch = txs.take(5).toList();
+      final fetched = await Future.wait(
+        toFetch.map((t) async {
+          try {
+            final d = await SolScanService.instance.getTransactionDetail(
+              t.signature,
+            );
+            return MapEntry(t.signature, d);
+          } catch (e) {
+            log('getTransactionDetail error: $e');
+            return null;
+          }
+        }),
+      );
+      for (final e in fetched) {
+        if (e != null) details[e.key] = e.value;
+      }
+      if (mounted) {
+        setState(() => _txDetails = details);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _vaultError = l10n.scanError(e);
+        _vaultBusy = false;
+      });
+    }
+  }
+
+  Future<void> _removeWallet() async {
+    final addr = _walletAddress;
+    await WalletAuthService.instance.deauthorize();
+    if (addr != null) {
+      await StatsDb.instance.deleteVaultData(addr);
+    }
+    if (!mounted) return;
+    setState(() {
+      _walletAddress = null;
+      _walletLabel = null;
+      _solLamports = -1;
+      _totalUsd = 0;
+      _pricesUnavailable = false;
+      _tokenAccounts = [];
+      _assets = [];
+      _txs = [];
+      _vaultError = '';
+      _vaultSuccess = '';
+      _vaultBusy = false;
+      _addressController.clear();
+    });
+  }
+
+  double _estimateUsd(
+    int lamports,
+    List<AssetInfo> assets,
+    Map<String, double> prices,
+  ) {
+    double total = 0;
+    final solPrice = prices[SolScanService.solMint] ?? 0;
+    if (lamports > 0) total += (lamports / 1e9) * solPrice;
+    for (final a in assets.where((a) => a.isFungible)) {
+      final price = prices[a.id] ?? 0;
+      final balance = int.tryParse(a.balance);
+      if (price > 0 && balance != null) {
+        var units = balance.toDouble();
+        if (a.decimals > 0) units /= _pow10(a.decimals);
+        total += units * price;
+      }
+    }
+    return total;
+  }
+
+  static double _pow10(int e) {
+    var v = 1.0;
+    for (int i = 0; i < e; i++) {
+      v *= 10;
+    }
+    return v;
+  }
+
+  Future<void> _restoreWallet() async {
+    final auth = await WalletAuthService.instance.restore();
+    if (auth != null && mounted) {
+      setState(() {
+        _walletAddress = auth.address;
+        _walletLabel = auth.accountLabel;
+      });
+    }
+  }
+
+  // ---- Metrics row ----
+  Widget _metricsRow() {
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Row(
+        children: [
+          _metricBlock(
+            l10n.charge,
+            _batteryLevel < 0
+                ? '...'
+                : '$_batteryLevel%${_charging ? ' *' : ''}',
+          ),
+          SizedBox(width: 12),
+          _metricBlock(l10n.uptime, _uptime.isEmpty ? '...' : _uptime),
+          if (_batteryInfoAvailable) ...[
+            SizedBox(width: 12),
+            _metricBlock(
+              l10n.batteryCapacity,
+              _effectiveCapacityUah > 0
+                  ? '${(_currentChargeUah / 1000.0).round()} / ${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                  : '${(_currentChargeUah / 1000.0).round()} mAh',
+              onLongPress: _effectiveCapacityUah > 0 ? _showCalibrationDialog : null,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _metricBlock(String label, String value, {VoidCallback? onLongPress}) {
+    final ds = context.ds;
+    return Expanded(
+      child: GestureDetector(
+        onLongPress: onLongPress,
+        child: Container(
+          padding: EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: ds.panel,
+            border: Border.all(color: ds.dark, width: 1),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(color: ds.dim, fontSize: 20, letterSpacing: 2),
+              ),
+              SizedBox(height: 4),
+              Text(value, style: TextStyle(color: ds.primary, fontSize: 20)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- Screen time summary bar ----
+  Widget _screenTimeBar() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: ds.panel,
+          border: Border.all(color: ds.primary, width: 1),
+        ),
+        child: Row(
+          children: [
+            Text(
+              l10n.screenTime,
+              style: TextStyle(color: ds.dim, fontSize: 14, letterSpacing: 2),
+            ),
+            Spacer(),
+            Text(
+              l10n.refreshIn(_refreshCountdown),
+              style: TextStyle(
+                color: ds.primary,
+                fontSize: 15,
+                letterSpacing: 1,
+              ),
+            ),
+            SizedBox(width: 14),
+            Text(
+              _totalFgMs > 0 ? _fmtDuration(_totalFgMs) : '0s',
+              style: TextStyle(color: ds.primary, fontSize: 22),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- Period switch (segmented retro buttons) ----
+  Widget _periodSwitch() {
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          for (final p in Period.values) ...[
+            Expanded(child: _periodBtn(p)),
+            if (p != Period.all) SizedBox(width: 6),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _periodBtn(Period p) {
+    final ds = context.ds;
+    final active = _period == p;
+    return GestureDetector(
+      onTap: () {
+        setState(() => _period = p);
+        StatsDb.instance.setMeta('period', '${p.index}');
+        _loadRows();
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: active ? ds.primary : Colors.transparent,
+          border: Border.all(color: ds.primary, width: 1),
+        ),
+        child: Text(
+          _periodLabel(p).toUpperCase(),
+          style: TextStyle(
+            color: active ? ds.bg : ds.primary,
+            fontSize: 17,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- Access hint ----
+  Widget _accessHint() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 12),
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: ds.hintBg,
+        border: Border.all(color: ds.dark, width: 1),
+      ),
+      child: Column(
+        children: [
+          Text(
+            l10n.usageAccessRequired,
+            style: TextStyle(color: ds.primary, letterSpacing: 1),
+          ),
+          SizedBox(height: 6),
+          Text(
+            l10n.grantAccessHint,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: ds.dim, fontSize: 20),
+          ),
+          SizedBox(height: 10),
+          _pipboyButton(l10n.grantAccess, _openUsageSettings),
+        ],
+      ),
+    );
+  }
+
+  Widget _pipboyButton(String label, VoidCallback onTap) {
+    final ds = context.ds;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        decoration: BoxDecoration(
+          color: ds.primary,
+          border: Border.all(color: ds.primary, width: 1),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: ds.bg,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- Sort header ----
+  Widget _sortHeader() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 0, 12, 6),
+      child: Row(
+        children: [
+          Text(
+            l10n.applicationsHeader,
+            style: TextStyle(color: ds.dim, fontSize: 20, letterSpacing: 1),
+          ),
+          Spacer(),
+          _sortLabel(l10n.sortTime, SortKey.time),
+          SizedBox(width: 14),
+          _sortLabel(l10n.sortLaunch, SortKey.launches),
+        ],
+      ),
+    );
+  }
+
+  Widget _sortLabel(String label, SortKey key) {
+    final ds = context.ds;
+    final isActive = _sortKey == key;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          if (_sortKey == key) {
+            _sortDesc = !_sortDesc;
+          } else {
+            _sortKey = key;
+            _sortDesc = true;
+          }
+        });
+        StatsDb.instance.setMeta('sort_key', '${_sortKey.index}');
+        StatsDb.instance.setMeta('sort_desc', _sortDesc ? '1' : '0');
+        _loadRows();
+      },
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: isActive ? ds.primary : ds.dim,
+              fontSize: 17,
+              fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
+              letterSpacing: 1,
+            ),
+          ),
+          if (isActive)
+            Icon(
+              _sortDesc ? Icons.arrow_drop_down : Icons.arrow_drop_up,
+              size: 14,
+              color: ds.primary,
+            ),
+        ],
+      ),
+    );
+  }
+
+  // ---- App list ----
+  Widget _appList() {
+    final ds = context.ds;
+    return ListView.builder(
+      itemCount: _rows.length,
+      itemBuilder: (ctx, i) {
+        final r = _rows[i];
+        final pkg = r['package'] as String;
+        return Container(
+          margin: EdgeInsets.symmetric(horizontal: 12, vertical: 1),
+          decoration: BoxDecoration(
+            border: Border(bottom: BorderSide(color: ds.dark, width: 1)),
+          ),
+          child: ListTile(
+            contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            leading: FutureBuilder<String>(
+              future: _iconFor(pkg),
+              builder: (ctx, snap) {
+                final b64 = snap.data;
+                if (b64 != null && b64.isNotEmpty) {
+                  return Image.memory(
+                    base64Decode(b64),
+                    width: 36,
+                    height: 36,
+                    gaplessPlayback: true,
+                  );
+                }
+                return _PlaceholderIcon();
+              },
+            ),
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        r['label'] as String,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: ds.primary, fontSize: 20),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      '> ${_fmtDuration(r['fg_ms'] as int)}',
+                      style: TextStyle(color: ds.primary, fontSize: 17),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 2),
+                Text(
+                  pkg,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: ds.dim, fontSize: 13),
+                ),
+                SizedBox(height: 3),
+                _usageBar(r['fg_ms'] as int),
+                SizedBox(height: 3),
+                if (_batteryInfoAvailable) ...[
+                  if (_charging) ...[
+                    Row(
+                      children: [
+                        Icon(Icons.flash_on, color: ds.battery, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'CHARGING',
+                          style: TextStyle(
+                            color: ds.battery,
+                            fontSize: 14,
+                            letterSpacing: 1,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else ...[
+                    if ((r['drain_pct'] as num?) != null && (r['drain_pct'] as num) > 0) ...[
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _batteryBar((r['drain_pct'] as num).toDouble()),
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            _drainLabel(
+                              (r['drain_pct'] as num).toDouble(),
+                              (r['drain_mah'] as num).toDouble(),
+                            ),
+                            style: TextStyle(
+                              color: ds.battery,
+                              fontSize: 14,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ],
+              ],
+            ),
+            trailing: Padding(
+              padding: EdgeInsets.only(left: 8),
+              child: Text(
+                '${r['launches']}x',
+                style: TextStyle(color: ds.dim, fontSize: 15),
+              ),
+            ),
+            onTap: () => _showAppMenu(pkg),
+            onLongPress: () => _resetPackage(pkg),
+          ),
+        );
+      },
+    );
+  }
+
+/// Proportional green usage bar for a row relative to total screen time.
+  Widget _usageBar(int fgMs) {
+    final ds = context.ds;
+    final max = _totalFgMs > 0 ? _totalFgMs : 1;
+    final frac = (fgMs / max).clamp(0.0, 1.0);
+    return Container(
+      height: 6,
+      decoration: BoxDecoration(
+        color: ds.dark,
+        border: Border.all(color: ds.dark, width: 1),
+      ),
+      alignment: Alignment.centerLeft,
+      child: FractionallySizedBox(
+        widthFactor: frac,
+        child: Container(color: ds.primary),
+      ),
+    );
+  }
+
+  /// Proportional amber battery drain bar for a row relative to total drain.
+  Widget _batteryBar(double pct) {
+    final ds = context.ds;
+    final frac = (pct / 100.0).clamp(0.0, 1.0);
+    return Container(
+      height: 6,
+      decoration: BoxDecoration(
+        color: ds.dark,
+        border: Border.all(color: ds.dark, width: 1),
+      ),
+      alignment: Alignment.centerLeft,
+      child: FractionallySizedBox(
+        widthFactor: frac,
+        child: Container(color: ds.battery),
+      ),
+    );
+  }
+
+  /// Formats the drain percentage and mAh into a label string.
+  String _drainLabel(double pct, double mah) {
+    return '${pct.toStringAsFixed(1)}% · ${mah.toStringAsFixed(0)} mAh';
+  }
+
+  // ---- SysInfo tab (device technical details) ----
+  Widget _sysInfoTab() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return RefreshIndicator(
+      onRefresh: () async {
+        setState(() {
+          _deviceInfoFuture = StatsService.getDeviceInfo();
+        });
+        await _deviceInfoFuture;
+      },
+      color: ds.primary,
+      backgroundColor: ds.bg,
+      child: FutureBuilder<Map?>(
+        future: _deviceInfoFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(color: ds.primary),
+                  SizedBox(height: 16),
+                  Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: 14)),
+                ],
+              ),
+            );
+          }
+          if (snapshot.hasError || snapshot.data == null) {
+            return Center(
+              child: Text(
+                l10n.deviceInfoLoadFailed,
+                style: TextStyle(color: ds.dangerBorder, fontSize: 16, letterSpacing: 2),
+              ),
+            );
+          }
+          final data = snapshot.data!;
+          // Enrich battery data with Dart-side capacity estimates
+          final batteryMap = Map<String, dynamic>.from(data['battery'] as Map? ?? {});
+          if (_calibratedCapacityUah > 0) batteryMap['calibratedCapacityUah'] = _calibratedCapacityUah;
+          if (_realCapacityUah > 0) batteryMap['realCapacityUah'] = _realCapacityUah;
+          if (_effectiveCapacityUah > 0) batteryMap['effectiveCapacityUah'] = _effectiveCapacityUah;
+          String capacitySource = 'sysfs';
+          if (_calibratedCapacityUah > 0) {
+            capacitySource = 'calibrated';
+          } else if (_designCapacityUah > 0) {
+            capacitySource = 'design';
+          } else if (_realCapacityUah > 0) {
+            capacitySource = 'estimated';
+          }
+          batteryMap['capacitySource'] = capacitySource;
+          data['battery'] = batteryMap;
+          return ListView(
+            padding: EdgeInsets.all(12),
+            children: [
+              _infoSection(ds, l10n, 'DEVICE', data['device'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'SCREEN', data['screen'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'BATTERY', data['battery'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'STORAGE', data['storage'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'MEMORY', data['memory'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'CPU', data['cpu'] as Map? ?? {}),
+              SizedBox(height: 12),
+              _infoSection(ds, l10n, 'NETWORK', data['network'] as Map? ?? {}),
+              SizedBox(height: 20),
+              _privacySection(),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // ---- INFO tab (Legal, About, Links) ----
+  Widget _infoTab() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return ListView(
+      padding: EdgeInsets.all(12),
+      children: [
+        _infoSection(ds, l10n, l10n.aboutApp, {
+          'version': l10n.appVersion('1.1.0'),
+          'description': l10n.appDescription,
+        }),
+        SizedBox(height: 12),
+        _infoSection(ds, l10n, 'LEGAL', {
+          'terms': l10n.termsOfService,
+          'privacy': l10n.privacyPolicy,
+        }, onTap: (key) {
+          if (key == 'terms') _showTerms();
+          if (key == 'privacy') _showPrivacy();
+        }),
+        SizedBox(height: 12),
+        _infoSection(ds, l10n, 'LINKS', {
+          'website': 'https://pipstats.skr',
+          'github': 'https://github.com/evil/device_stats',
+          'terms_url': 'https://pipstats.skr/terms',
+          'privacy_url': 'https://pipstats.skr/privacy',
+        }),
+      ],
+    );
+  }
+
+  void _showTerms() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        title: Text(l10n.termsOfService, style: TextStyle(color: ds.primary, fontSize: 20)),
+        content: SingleChildScrollView(
+          child: Text(l10n.termsBody, style: TextStyle(color: ds.dim, fontSize: 15)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(l10n.close, style: TextStyle(color: ds.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTipModal() async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+
+    if (_walletAddress == null) {
+      _showSnack(l10n.tipNoWallet);
+      return;
+    }
+
+    final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        title: Text(l10n.tipTitle, style: TextStyle(color: ds.primary, fontSize: 20)),
+        content: Form(
+          key: formKey,
+          child: TextFormField(
+            controller: controller,
+            keyboardType: TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              hintText: l10n.tipAmountHint,
+              hintStyle: TextStyle(color: ds.dim),
+              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: ds.primary)),
+              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: ds.primary, width: 2)),
+            ),
+            style: TextStyle(color: ds.primary, fontSize: 18),
+            validator: (v) {
+              if (v == null || v.trim().isEmpty) return l10n.tipInvalidAmount;
+              final amount = double.tryParse(v.trim());
+              if (amount == null || amount <= 0) return l10n.tipInvalidAmount;
+              return null;
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (!formKey.currentState!.validate()) return;
+              Navigator.pop(ctx);
+              await _sendTip(double.parse(controller.text.trim()));
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: ds.primary),
+            child: Text(l10n.tipSend, style: TextStyle(color: ds.bg)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sendTip(double amountSkr) async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        content: Row(
+          children: [
+            CircularProgressIndicator(color: ds.primary),
+            SizedBox(width: 16),
+            Text(l10n.tipSending, style: TextStyle(color: ds.primary)),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // Build SPL token transfer transaction
+      final blockhash = await _getBlockhash();
+      final txBytes = await _buildTipTransaction(
+        ownerAddress: _walletAddress!,
+        amountSkr: amountSkr,
+        blockhash: blockhash,
+      );
+
+      // Send via MWA/Seed Vault
+      final channel = MethodChannel('device_stats/usage');
+      final response = await channel.invokeMethod<Map>('sendTip', {
+        'message_bytes': txBytes,
+      });
+
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+
+      if (response == null || response['signature'] == null) {
+        throw Exception(l10n.tipNoWallet);
+      }
+
+      final sigB64 = response['signature'] as String;
+      final sigBytes = base64.decode(sigB64);
+      final sig = base58Encode(Uint8List.fromList(sigBytes));
+
+      if (!mounted) return;
+      _showSnack(l10n.tipSuccess(sig));
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading
+      _showSnack(l10n.tipError(e.toString()));
+    }
+  }
+
+  Future<String> _getBlockhash() async {
+    const maxAttempts = 3;
+    for (var attempt = 0; ; attempt++) {
+      final resp = await http.post(
+        Uri.parse(rpcUrl()),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'jsonrpc': '2.0',
+          'id': 1,
+          'method': 'getLatestBlockhash',
+          'params': [{'commitment': 'finalized'}],
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      if (resp.statusCode == 429 && attempt < maxAttempts - 1) {
+        await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+        continue;
+      }
+      if (resp.statusCode != 200) throw Exception('RPC HTTP ${resp.statusCode}');
+
+      final json = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (json['error'] != null) throw Exception('RPC error: ${json['error']}');
+      return (json['result'] as Map<String, dynamic>)['value']['blockhash'] as String;
+    }
+  }
+
+  Future<List<int>> _buildTipTransaction({
+    required String ownerAddress,
+    required double amountSkr,
+    required String blockhash,
+  }) async {
+    final owner = Ed25519HDPublicKey.fromBase58(ownerAddress);
+    final mint = Ed25519HDPublicKey.fromBase58(_skrMint);
+
+    // Derive sender's associated token account (ATA)
+    final senderAta = await findAssociatedTokenAddress(owner: owner, mint: mint);
+    // Derive recipient ATA (tip destination - developer wallet)
+    const devAddress = '5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm';
+    final devPubkey = Ed25519HDPublicKey.fromBase58(devAddress);
+    final recipientAta = await findAssociatedTokenAddress(owner: devPubkey, mint: mint);
+
+    final amountRaw = (amountSkr * pow(10, _skrDecimals)).round();
+
+    // Create recipient ATA if it doesn't exist (idempotent - safe to include)
+    final createAtaIx = AssociatedTokenAccountInstruction.createAccountIdempotent(
+      funder: owner,
+      address: recipientAta,
+      owner: devPubkey,
+      mint: mint,
+    );
+
+    final transferIx = TokenInstruction.transfer(
+      source: senderAta,
+      destination: recipientAta,
+      owner: owner,
+      amount: amountRaw,
+      signers: [owner],
+    );
+
+    final message = Message(instructions: [createAtaIx, transferIx]);
+    final compiled = message.compile(
+      recentBlockhash: blockhash,
+      feePayer: owner,
+    );
+
+    // Serialize unsigned transaction with placeholder signatures
+    final signatures = List<Signature>.generate(
+      compiled.requiredSignatureCount,
+      (_) => Signature(List<int>.filled(64, 0), publicKey: owner),
+    );
+    return SignedTx(
+      signatures: signatures,
+      compiledMessage: compiled,
+    ).toByteArray().toList();
+  }
+
+  void _showSnack(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg, style: TextStyle(color: context.ds.bg)),
+        backgroundColor: context.ds.primary,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  // ---- Info section helper (used by SYSINFO and INFO tabs) ----
+  Widget _infoSection(DeviceStatsColors ds, AppLocalizations l10n, String title, Map map, {void Function(String)? onTap}) {
+    if (map.isEmpty) return const SizedBox.shrink();
+    final widgets = <Widget>[
+      Text(
+        '[ $title ]',
+        style: TextStyle(color: ds.primary, fontSize: 20, letterSpacing: 2),
+      ),
+      SizedBox(height: 6),
+    ];
+    map.forEach((key, value) {
+      final valStr = _formatValue(key, value);
+      final rowWidget = Container(
+        margin: EdgeInsets.only(bottom: 4),
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: ds.panel,
+          border: Border.all(color: ds.dark, width: 1),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 2,
+              child: Text(
+                _formatKey(key),
+                style: TextStyle(color: ds.dim, fontSize: 13, letterSpacing: 1),
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              flex: 3,
+              child: Text(
+                valStr,
+                style: TextStyle(color: ds.primary, fontSize: 13),
+                textAlign: TextAlign.right,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+      if (onTap != null) {
+        widgets.add(GestureDetector(
+          onTap: () => onTap(key),
+          child: rowWidget,
+        ));
+      } else {
+        widgets.add(rowWidget);
+      }
+    });
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets);
+  }
+
+  String _formatKey(String key) {
+    return key.replaceAllMapped(RegExp(r'([A-Z])'), (m) => ' ${m[1]}').trim().toUpperCase();
+  }
+
+  String _formatValue(String key, dynamic value) {
+    if (value == null) return 'N/A';
+    final v = value is int ? value.toDouble() : (value is double ? value : double.tryParse(value.toString()));
+    if (v == null) return value.toString();
+    final kl = key.toLowerCase();
+    if (kl.contains('bytes') || kl.endsWith('size')) {
+      return _formatBytes(v);
+    }
+    if (kl.contains('freq') || kl.endsWith('khz') || kl.endsWith('mhz') || kl.endsWith('ghz')) {
+      return _formatFreq(v);
+    }
+    if (kl.contains('temp') && kl.contains('c')) {
+      return _formatTemp(v);
+    }
+    if (kl.contains('volt') || kl.endsWith('v') || kl.endsWith('voltage')) {
+      return _formatVoltage(v);
+    }
+    if (kl.contains('chargecounter') || kl.contains('capacity') && kl.contains('uah') || kl.endsWith('uah')) {
+      return _formatCharge(v);
+    }
+    if (kl.contains('current') && kl.contains('ua')) {
+      return _formatCurrent(v);
+    }
+    if (kl.contains('percent') || kl.endsWith('pct') || kl.endsWith('level')) {
+      return '${v.round()}%';
+    }
+    return value.toString();
+  }
+
+  String _formatBytes(double bytes) {
+    if (bytes < 1024) return '${bytes.round()} B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    if (bytes < 1024 * 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+  }
+
+  String _formatFreq(double khz) {
+    if (khz >= 1000000) return '${(khz / 1000000).toStringAsFixed(2)} GHz';
+    if (khz >= 1000) return '${(khz / 1000).toStringAsFixed(1)} MHz';
+    return '${khz.round()} kHz';
+  }
+
+  String _formatTemp(double tempC10) {
+    final c = tempC10 / 10.0;
+    return '${c.toStringAsFixed(1)} °C';
+  }
+
+  String _formatVoltage(double uv) {
+    if (uv >= 1000000) return '${(uv / 1000000).toStringAsFixed(2)} V';
+    if (uv >= 1000) return '${(uv / 1000).toStringAsFixed(1)} mV';
+    return '${uv.round()} µV';
+  }
+
+  String _formatCharge(double uah) {
+    if (uah >= 1000000) return '${(uah / 1000000).toStringAsFixed(2)} Ah';
+    if (uah >= 1000) return '${(uah / 1000).toStringAsFixed(1)} mAh';
+    return '${uah.round()} µAh';
+  }
+
+  String _formatCurrent(double ua) {
+    if (ua >= 1000000) return '${(ua / 1000000).toStringAsFixed(2)} A';
+    if (ua >= 1000) return '${(ua / 1000).toStringAsFixed(1)} mA';
+    return '${ua.round()} µA';
+  }
+
+  Future<void> _showAppMenu(String pkg) async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: ds.bg,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: double.infinity,
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: ds.dark)),
+              ),
+              child: Text(
+                '> $pkg',
+                style: TextStyle(color: ds.dim, fontSize: 20),
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.info_outline, color: ds.primary),
+              title: Text(
+                l10n.appInfo,
+                style: TextStyle(color: ds.primary, letterSpacing: 1),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                StatsService.openAppInfo(pkg);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.delete, color: ds.primary),
+              title: Text(
+                l10n.resetStats,
+                style: TextStyle(color: ds.primary, letterSpacing: 1),
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                _resetPackage(pkg);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showCalibrationDialog() async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    final controller = TextEditingController(text: '${(_effectiveCapacityUah / 1000.0).round()}');
+
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: ds.bg,
+          title: Text(l10n.calibrateCapacity, style: TextStyle(color: ds.primary, letterSpacing: 2)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(l10n.enterKnownCapacityMah, style: TextStyle(color: ds.dim, fontSize: 13)),
+              SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                style: TextStyle(color: ds.primary, fontSize: 18),
+                decoration: InputDecoration(
+                  hintText: 'e.g. 4500',
+                  hintStyle: TextStyle(color: ds.dark),
+                  enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: ds.dark)),
+                  focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: ds.primary)),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+            ),
+            TextButton(
+              onPressed: () {
+                final mAh = int.tryParse(controller.text.trim());
+                if (mAh != null && mAh > 0) {
+                  _calibratedCapacityUah = mAh * 1000;
+                  StatsDb.instance.setMeta('battery_calibrated_capacity_uah', '$_calibratedCapacityUah');
+                  setState(() {});
+                }
+                Navigator.pop(ctx);
+              },
+              child: Text(l10n.calibrate, style: TextStyle(color: ds.primary)),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  String _periodLabel(Period p) {
+    final l10n = AppLocalizations.of(context);
+    switch (p) {
+      case Period.day:
+        return l10n.periodDay;
+      case Period.week:
+        return l10n.periodWeek;
+      case Period.month:
+        return l10n.periodMonth;
+      case Period.all:
+        return l10n.periodAll;
+    }
+  }
+}
+
+/// Grey placeholder shown when an app icon is unavailable.
+class _PlaceholderIcon extends StatelessWidget {
+  const _PlaceholderIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    final ds = context.ds;
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: ds.dark,
+        border: Border.all(color: ds.dim, width: 1),
+      ),
+      child: Icon(Icons.android, color: ds.dim, size: 20),
+    );
+  }
+}
+
+/// CRT scanline overlay for Pip-Boy aesthetic.
+class _Scanlines extends StatelessWidget {
+  const _Scanlines();
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: Size.infinite,
+      painter: _ScanlinePainter(context.ds.scanline),
+    );
+  }
+}
+
+class _ScanlinePainter extends CustomPainter {
+  _ScanlinePainter(this.scanline);
+
+  final Color scanline;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = scanline
+      ..strokeWidth = 1;
+    for (double y = 0; y < size.height; y += 3) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}

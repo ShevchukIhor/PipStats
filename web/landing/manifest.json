@@ -1,0 +1,68 @@
+{
+  "name": "PipStats",
+  "short_name": "PipStats",
+  "description": "Local device statistics tracker for Android. Tracks app foreground time, launch counts, and per-app battery drain. No cloud, no tracking. Built for Solana Mobile.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020402",
+  "theme_color": "#00FF00",
+  "orientation": "portrait-primary",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-maskable-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity"],
+  "screenshots": [
+    {
+      "src": "assets/screenshots/screenshot-1.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "SYSTEM tab - App usage tracking"
+    },
+    {
+      "src": "assets/screenshots/screenshot-2.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "VAULT tab - Seed Vault integration"
+    },
+    {
+      "src": "assets/screenshots/screenshot-3.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "SYSINFO tab - Battery & device info"
+    },
+    {
+      "src": "assets/screenshots/screenshot-4.png",
+      "sizes": "1280x720",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "INFO tab - Terms, Privacy, About"
+    }
+  ]
+}

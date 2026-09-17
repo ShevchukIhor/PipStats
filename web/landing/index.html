@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Primary Meta Tags -->
+  <title>PipStats — Local Device Statistics for Solana Mobile</title>
+  <meta name="title" content="PipStats — Local Device Statistics for Solana Mobile">
+  <meta name="description" content="PipStats tracks app foreground time, launch counts, and per-app battery drain locally on your device. No cloud, no tracking. Built for Solana Mobile with Seed Vault integration.">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://pipboy.skr/">
+  <meta property="og:title" content="PipStats — Local Device Statistics">
+  <meta property="og:description" content="Track app usage & battery drain locally. Seed Vault ready. No cloud. No tracking.">
+  <meta property="og:image" content="https://pipboy.skr/assets/banner-hero.png">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="https://pipboy.skr/">
+  <meta property="twitter:title" content="PipStats — Local Device Statistics">
+  <meta property="twitter:description" content="Track app usage & battery drain locally. Seed Vault ready. No cloud. No tracking.">
+  <meta property="twitter:image" content="https://pipboy.skr/assets/banner-hero.png">
+
+  <!-- Theme Color -->
+  <meta name="theme-color" content="#00FF00">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="PipStats">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Preconnect for performance -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="dns-prefetch" href="https://fonts.gstatic.com">
+
+  <!-- JSON-LD Structured Data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "PipStats",
+    "applicationCategory": "UtilityApplication",
+    "operatingSystem": "Android",
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD",
+      "availability": "https://schema.org/InStock"
+    },
+    "description": "Local device statistics tracker for Android. Tracks app foreground time, launch counts, and per-app battery drain. No cloud, no tracking. Built for Solana Mobile with Seed Vault integration.",
+    "featureList": [
+      "Local app usage tracking (foreground time & launches)",
+      "Per-app battery drain estimation",
+      "Seed Vault hardware signing",
+      "Solana wallet connection via Mobile Wallet Adapter",
+      ".skr domain support",
+      "SKR token tipping",
+      "No cloud, no tracking, local-first"
+    ],
+    "operatingSystems": ["Android 8.0+"],
+    "downloadUrl": "https://github.com/evil/device_stats/releases/latest/download/app-release.apk",
+    "author": {
+      "@type": "Person",
+      "name": "evil"
+    },
+    "url": "https://pipboy.skr/"
+  }
+  </script>
+
+  <!-- Base href for Flutter -->
+  <base href="$FLUTTER_BASE_HREF">
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

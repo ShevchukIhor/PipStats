@@ -1,0 +1,30 @@
+name: pipstats
+description: Local device statistics tracker — app usage, battery drain, Seed Vault. No cloud, no tracking.
+publish_to: none
+version: 1.1.0+2
+environment:
+  sdk: ^3.13.0
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+  battery_plus: ^7.1.1
+  cupertino_icons: ^1.0.8
+  http: ^1.2.0
+  solana: ^0.32.0+1
+  crypto: ^3.0.7
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  generate: true
+  fonts:
+    - family: VT323
+      fonts:
+        - asset: assets/fonts/VT323-Regular.ttf
