@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy — PipStats</title>
+  <meta name="description" content="PipStats Privacy Policy.">
+  <meta name="theme-color" content="#00FF00">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/logo-icon.png">
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <a class="brand" href="index.html" aria-label="PipStats home">
+        <img src="assets/logo.png" alt="PipStats">
+      </a>
+      <ul>
+        <li><a href="index.html#features">FEATURES</a></li>
+        <li><a href="index.html#download">DOWNLOAD</a></li>
+        <li><a href="terms.html">TERMS</a></li>
+        <li><a href="privacy.html">PRIVACY</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <main class="wrap legal">
+    <p class="back"><a href="index.html">HOME</a></p>
+    <h1>PRIVACY POLICY</h1>
+    <p class="updated">LAST UPDATED: SEPTEMBER 2026</p>
+
+    <h2>1. Data Controller</h2>
+    <p>PipStats ("the App") is developed and maintained by the individual developer operating under the GitHub handle "ShevchukIhor". Contact: <a href="https://github.com/ShevchukIhor/PipStats">https://github.com/ShevchukIhor/PipStats</a>.</p>
+
+    <h2>2. Data Collected</h2>
+    <p>The App collects and stores the following data locally on your device:</p>
+    <ul>
+      <li>Application usage statistics: foreground time (milliseconds) and launch counts per package</li>
+      <li>Battery samples: charge counter (µAh), current (µA), charging state, timestamps</li>
+      <li>Wallet connection: public Solana address (base58) and optional account label</li>
+      <li>Calibration data: manually entered battery capacity (mAh)</li>
+    </ul>
+    <p>No personal identifiers (name, email, phone, location) are collected. No analytics, crash reporting, or telemetry are implemented.</p>
+
+    <h2>3. Purpose of Processing</h2>
+    <ul>
+      <li>Displaying your app usage statistics (foreground time, launches)</li>
+      <li>Estimating per-app battery drain</li>
+      <li>Showing wallet balance and token/NFT holdings (read-only)</li>
+      <li>Enabling optional SKR token tipping via Seed Vault</li>
+    </ul>
+
+    <h2>4. Storage &amp; Security</h2>
+    <p>All data is stored in a local SQLite database (sqflite) on your device's internal storage. The database is not backed up to cloud services. The App does not implement any network sync for user data. Wallet private keys and seed phrases never leave the Seed Vault hardware enclave; the App only receives signed transaction results.</p>
+
+    <h2>5. Data Sharing</h2>
+    <p>Your data is never sold, rented, or shared with third parties. The only external communication is:</p>
+    <ul>
+      <li>Read-only RPC calls to public Solana endpoints (your public address)</li>
+      <li>Optional Helius API calls for token/NFT metadata (public address only)</li>
+      <li>.skr domain resolution via AllDomains (public domain query)</li>
+    </ul>
+    <p>No usage statistics, battery data, or calibration data ever leaves your device.</p>
+
+    <h2>6. Seed Vault &amp; Wallet Authorization</h2>
+    <p>When you connect a wallet, the App uses Mobile Wallet Adapter (MWA) to request authorization from Seed Vault. You explicitly approve each connection and each transaction via the Seed Vault UI (double-tap on Seeker). The App never sees, stores, or transmits your private keys, seed phrase, or signing credentials.</p>
+
+    <h2>7. Data Retention</h2>
+    <ul>
+      <li>Usage statistics: cleared via "RESET STATS" button or app uninstall</li>
+      <li>Battery samples: cleared via app uninstall</li>
+      <li>Wallet connection: cleared via "REMOVE" button or app uninstall</li>
+      <li>Calibration: persists across sessions until manually reset</li>
+    </ul>
+
+    <h2>8. Your Rights</h2>
+    <ul>
+      <li>Access: View all data in the App's UI (SYSTEM, SYSINFO, VAULT tabs)</li>
+      <li>Rectification: Manually calibrate battery capacity</li>
+      <li>Erasure: Use "RESET STATS" or uninstall the App</li>
+      <li>Portability: Data is in standard SQLite format (accessible via adb)</li>
+    </ul>
+
+    <h2>9. Third-Party Services</h2>
+    <ul>
+      <li>Public Solana RPC endpoints (Solana Foundation, Helius, etc.)</li>
+      <li>Helius API (optional, for enhanced token/NFT metadata)</li>
+      <li>AllDomains / ANS (for .skr domain resolution)</li>
+    </ul>
+    <p>These services receive only your public wallet address or domain query. Review their privacy policies separately.</p>
+
+    <h2>10. Children's Privacy</h2>
+    <p>The App is not directed at children under 13 (or applicable age). No personal data is collected from children. If you believe a child has provided data, contact the developer for immediate deletion.</p>
+
+    <h2>11. Changes to This Policy</h2>
+    <p>This Privacy Policy may be updated. Changes will be reflected on this page. Continued use constitutes acceptance of the updated policy.</p>
+
+    <h2>12. Contact</h2>
+    <p>For privacy inquiries, contact the developer via GitHub: <a href="https://github.com/ShevchukIhor/PipStats">https://github.com/ShevchukIhor/PipStats</a>.</p>
+  </main>
+
+  <footer class="wrap">
+    <p class="copy">2026 PIPSTATS &bull; NO CLOUD &bull; NO TRACKING &bull; BUILT FOR SOLANA MOBILE</p>
+  </footer>
+</body>
+</html>

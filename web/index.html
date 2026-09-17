@@ -1,46 +1,110 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
-  <base href="$FLUTTER_BASE_HREF">
-
   <meta charset="UTF-8">
-  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PipStats — Local Device Statistics for Solana Mobile</title>
+  <meta name="description" content="PipStats tracks app foreground time, launch counts, and per-app battery drain locally on your device. No cloud, no tracking. Built for Solana Mobile with Seed Vault integration.">
 
-  <!-- iOS meta tags & icons -->
+  <meta name="theme-color" content="#00FF00">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="device_stats">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <meta name="apple-mobile-web-app-title" content="PipStats">
 
-  <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PipStats — Local Device Statistics">
+  <meta property="og:description" content="Track app usage & battery drain locally. Seed Vault ready. No cloud. No tracking.">
+  <meta property="og:image" content="assets/banner.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="PipStats — Local Device Statistics">
+  <meta name="twitter:description" content="Track app usage & battery drain locally. Seed Vault ready. No cloud. No tracking.">
+  <meta name="twitter:image" content="assets/banner.png">
 
-  <title>device_stats</title>
-  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/logo-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!--
-    You can customize the "flutter_bootstrap.js" script.
-    This is useful to provide a custom configuration to the Flutter loader
-    or to give the user feedback during the initialization process.
+  <header>
+    <div class="wrap nav">
+      <a class="brand" href="index.html" aria-label="PipStats home">
+        <img src="assets/logo.png" alt="PipStats">
+      </a>
+      <ul>
+        <li><a href="#features">FEATURES</a></li>
+        <li><a href="#download">DOWNLOAD</a></li>
+        <li><a href="terms.html">TERMS</a></li>
+        <li><a href="privacy.html">PRIVACY</a></li>
+      </ul>
+    </div>
+  </header>
 
-    For more details:
-    * https://docs.flutter.dev/platform-integration/web/initialization
-  -->
-  <script src="flutter_bootstrap.js" async></script>
+  <main>
+    <section class="wrap hero">
+      <h1>PIPSTATS</h1>
+      <p class="sub">LOCAL DEVICE STATISTICS</p>
+      <p class="tag">NO CLOUD &bull; NO TRACKING &bull; SEED VAULT READY</p>
+      <div class="badge">VERSION 1.1.0 &bull; ANDROID 8.0+ (API 26) &bull; BUILT FOR SOLANA MOBILE</div>
+    </section>
+
+    <section id="features" class="wrap">
+      <h2 class="section-title">[ FEATURES ]</h2>
+      <div class="features">
+        <div class="feature">
+          <h3>LOCAL TRACKING</h3>
+          <p>Foreground time &amp; launch counts stored in a local SQLite database. No cloud, no analytics, no accounts. Your data never leaves the device.</p>
+        </div>
+        <div class="feature">
+          <h3>SEED VAULT INTEGRATION</h3>
+          <p>Hardware-backed signing via Mobile Wallet Adapter. Connect Phantom, Solflare, or Seed Vault on Seeker. Supports .skr domains.</p>
+        </div>
+        <div class="feature">
+          <h3>BATTERY INSIGHTS</h3>
+          <p>Per-app battery drain estimation with rolling median capacity. Manual calibration, charging indicator, real-time drain.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="download" class="wrap">
+      <h2 class="section-title">[ DOWNLOAD ]</h2>
+      <div class="download">
+        <a class="btn primary" href="https://github.com/ShevchukIhor/PipStats/releases/latest/download/app-release.apk">
+          <span class="lbl"><span class="t">DOWNLOAD APK (DIRECT)</span><span class="s">Latest release &bull; Android 8+</span></span>
+          <span class="arr">&#9656;</span>
+        </a>
+        <a class="btn" href="https://dappstore.solanamobile.com">
+          <span class="lbl"><span class="t">SOLANA DAPP STORE</span><span class="s">Official listing &bull; Auto-updates &bull; Verified</span></span>
+          <span class="arr">&#9656;</span>
+        </a>
+        <a class="btn" href="https://github.com/ShevchukIhor/PipStats">
+          <span class="lbl"><span class="t">VIEW ON GITHUB</span><span class="s">Source code &bull; Releases &bull; Issues</span></span>
+          <span class="arr">&#9656;</span>
+        </a>
+      </div>
+      <div class="legal-links">
+        <a href="terms.html">TERMS OF SERVICE</a><span>|</span><a href="privacy.html">PRIVACY POLICY</a>
+      </div>
+    </section>
+
+    <footer class="wrap">
+      <div class="links">
+        <a href="https://github.com/ShevchukIhor/PipStats">GITHUB</a><span>|</span>
+        <a href="https://alldomains.xyz">pip-boy.skr</a><span>|</span>
+        <a href="terms.html">TERMS</a><span>|</span>
+        <a href="privacy.html">PRIVACY</a>
+      </div>
+      <div class="donate">
+        <div class="ttl">SUPPORT DEVELOPMENT (SKR)</div>
+        <code>5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm</code>
+        <div class="dom"><u>pip-boy.skr</u></div>
+      </div>
+      <p class="copy">2026 PIPSTATS &bull; NO CLOUD &bull; NO TRACKING &bull; BUILT FOR SOLANA MOBILE</p>
+    </footer>
+  </main>
 </body>
 </html>
