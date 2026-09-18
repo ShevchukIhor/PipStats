@@ -382,7 +382,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get termsBody =>
-      'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipboy.skr/terms';
+      'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms';
 
   @override
   String get tipButton => 'TIP';

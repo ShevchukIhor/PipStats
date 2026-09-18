@@ -2308,10 +2308,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }),
         SizedBox(height: 12),
         _infoSection(ds, l10n, 'LINKS', {
-          'website': 'https://pipstats.skr',
-          'github': 'https://github.com/evil/device_stats',
-          'terms_url': 'https://pipstats.skr/terms',
-          'privacy_url': 'https://pipstats.skr/privacy',
+          'website': 'https://pipstats.pages.dev',
+          'github': 'https://github.com/ShevchukIhor/PipStats',
+          'terms_url': 'https://pipstats.pages.dev/terms',
+          'privacy_url': 'https://pipstats.pages.dev/privacy',
         }),
       ],
     );

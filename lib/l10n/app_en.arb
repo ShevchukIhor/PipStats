@@ -145,7 +145,7 @@
   "aboutApp": "ABOUT",
   "appVersion": "Version {version}",
   "appDescription": "Device Stats tracks app foreground time and launch counts locally. No cloud, no tracking. Built for Solana Mobile.",
-  "termsBody": "Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipboy.skr/terms",
+  "termsBody": "Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms",
   "tipButton": "TIP",
   "tipTitle": "SEND TIP (SKR)",
   "tipAmountHint": "AMOUNT (SKR)",

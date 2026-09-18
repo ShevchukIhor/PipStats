@@ -725,7 +725,7 @@ abstract class AppLocalizations {
   /// No description provided for @termsBody.
   ///
   /// In en, this message translates to:
-  /// **'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipboy.skr/terms'**
+  /// **'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms'**
   String get termsBody;
 
   /// No description provided for @tipButton.
