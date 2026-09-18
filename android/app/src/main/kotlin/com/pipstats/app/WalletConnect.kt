@@ -1,4 +1,4 @@
-package com.device.device_stats
+package com.pipstats.app
 
 import android.content.Context
 import android.net.Uri

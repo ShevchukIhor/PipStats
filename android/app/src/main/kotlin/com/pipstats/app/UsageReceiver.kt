@@ -1,4 +1,4 @@
-package com.device.device_stats
+package com.pipstats.app
 
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
@@ -66,7 +66,7 @@ class UsageReceiver : BroadcastReceiver() {
   }
 
   companion object {
-    const val ACTION_SYNC = "com.device.device_stats.ACTION_SYNC"
+    const val ACTION_SYNC = "com.pipstats.app.ACTION_SYNC"
     private const val OVERLAP_MS = 5 * 60 * 1000L
   }
 }

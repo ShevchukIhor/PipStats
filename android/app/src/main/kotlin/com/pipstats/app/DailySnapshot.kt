@@ -1,4 +1,4 @@
-package com.device.device_stats
+package com.pipstats.app
 
 import android.app.usage.UsageStatsManager
 import android.content.Context
