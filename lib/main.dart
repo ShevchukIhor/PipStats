@@ -2416,17 +2416,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       // Build SPL token transfer transaction
       final blockhash = await _getBlockhash();
+      debugPrint('TIP: got blockhash=$blockhash');
       final txBytes = await _buildTipTransaction(
         ownerAddress: _walletAddress!,
         amountSkr: amountSkr,
         blockhash: blockhash,
       );
+      debugPrint('TIP: building ok, txBytes.len=${txBytes.length}');
 
       // Send via MWA/Seed Vault
       final channel = MethodChannel('device_stats/usage');
+      debugPrint('TIP: invoking sendTip, bytes=${txBytes.length}');
       final response = await channel.invokeMethod<Map>('sendTip', {
         'message_bytes': txBytes,
       });
+      debugPrint('TIP: sendTip returned response=${response == null ? "null" : response.keys}');
 
       if (!mounted) return;
       Navigator.pop(context); // dismiss loading
@@ -2442,6 +2446,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       _showSnack(l10n.tipSuccess(sig));
     } catch (e) {
+      debugPrint('TIP: dart error -> $e');
       if (!mounted) return;
       Navigator.pop(context); // dismiss loading
       _showSnack(l10n.tipError(e.toString()));
