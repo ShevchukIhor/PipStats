@@ -2426,6 +2426,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       // Send via MWA/Seed Vault
       final channel = MethodChannel('device_stats/usage');
+      final MsgB64 = base64Encode(Uint8List.fromList(txBytes));
+      debugPrint('TIP: BASE64=$MsgB64');
       debugPrint('TIP: invoking sendTip, bytes=${txBytes.length}');
       final response = await channel.invokeMethod<Map>('sendTip', {
         'message_bytes': txBytes,
