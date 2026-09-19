@@ -52,7 +52,7 @@ class SolScanService {
     'jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZcosWBQoCpD': 'Jito Staking',
     'Stake11111111111111111111111111111111111111': 'Stake Program',
     'SysvarRent111111111111111111111111111111111': 'Rent Sysvar',
-    'SKRskrmtL83pcL4YqLWt6iPefDqwXQWHSw9S9vz94BZ': 'Seeker (SKR)',
+    'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3': 'Seeker (SKR)',
   };
 
   static String programName(String id) {

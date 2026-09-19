@@ -21,7 +21,7 @@ import 'rpc_config.dart';
 import 'base58.dart';
 import 'l10n/app_localizations.dart';
 
-const String _skrMint = 'SKRskrmtL83pcL4YqLWt6iPefDqwXQWHSw9S9vz94BZ';
+const String _skrMint = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
 const int _skrDecimals = 6;
 
 Future<void> main() async {
