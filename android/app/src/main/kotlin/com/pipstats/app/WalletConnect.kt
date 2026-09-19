@@ -139,6 +139,7 @@ object WalletConnect {
     CoroutineScope(Dispatchers.Main).launch {
       try {
         val txBytes = ByteArray(messageBytes.size) { i -> messageBytes[i].toByte() }
+        Log.d("WalletConnect", "tip tx base64: " + android.util.Base64.encodeToString(txBytes, android.util.Base64.NO_WRAP))
         val payload = walletAdapter.transact(s) {
           signAndSendTransactions(arrayOf(txBytes))
         }
