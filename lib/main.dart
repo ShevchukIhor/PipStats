@@ -1,14 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
-import 'dart:math' show pow;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:battery_plus/battery_plus.dart';
-import 'package:http/http.dart' as http;
-import 'package:solana/solana.dart';
+import 'tip_service.dart';
 
 import 'stats_db.dart';
 import 'stats_service.dart';
@@ -18,11 +16,8 @@ import 'wallet_auth.dart';
 import 'revoke.dart';
 import 'theme.dart';
 import 'rpc_config.dart';
-import 'base58.dart';
 import 'l10n/app_localizations.dart';
 
-const String _skrMint = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
-const int _skrDecimals = 6;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -2414,38 +2409,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
 
     try {
-      // Build SPL token transfer transaction
-      final blockhash = await _getBlockhash();
-      debugPrint('TIP: got blockhash=$blockhash');
-      final txBytes = await _buildTipTransaction(
-        ownerAddress: _walletAddress!,
+      debugPrint('TIP: sending via solana_mobile_client (mainnet cluster)');
+      final sig = await TipService().sendTip(
         amountSkr: amountSkr,
-        blockhash: blockhash,
+        senderAddress: _walletAddress!,
       );
-      debugPrint('TIP: building ok, txBytes.len=${txBytes.length}');
-
-      // Send via MWA/Seed Vault
-      final channel = MethodChannel('device_stats/usage');
-      final MsgB64 = base64Encode(Uint8List.fromList(txBytes));
-      debugPrint('TIP: BASE64=$MsgB64');
-      debugPrint('TIP: invoking sendTip, bytes=${txBytes.length}');
-      final response = await channel.invokeMethod<Map>('sendTip', {
-        'message_bytes': txBytes,
-      });
-      debugPrint('TIP: sendTip returned response=${response == null ? "null" : response.keys}');
+      debugPrint('TIP: sendTip done, sig=$sig');
 
       if (!mounted) return;
       Navigator.pop(context); // dismiss loading
-
-      if (response == null || response['signature'] == null) {
-        throw Exception(l10n.tipNoWallet);
-      }
-
-      final sigB64 = response['signature'] as String;
-      final sigBytes = base64.decode(sigB64);
-      final sig = base58Encode(Uint8List.fromList(sigBytes));
-
-      if (!mounted) return;
       _showSnack(l10n.tipSuccess(sig));
     } catch (e) {
       debugPrint('TIP: dart error -> $e');
@@ -2454,79 +2426,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _showSnack(l10n.tipError(e.toString()));
     }
   }
-
-  Future<String> _getBlockhash() async {
-    const maxAttempts = 3;
-    for (var attempt = 0; ; attempt++) {
-      final resp = await http.post(
-        Uri.parse(rpcUrl()),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'jsonrpc': '2.0',
-          'id': 1,
-          'method': 'getLatestBlockhash',
-          'params': [{'commitment': 'finalized'}],
-        }),
-      ).timeout(const Duration(seconds: 20));
-
-      if (resp.statusCode == 429 && attempt < maxAttempts - 1) {
-        await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
-        continue;
-      }
-      if (resp.statusCode != 200) throw Exception('RPC HTTP ${resp.statusCode}');
-
-      final json = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (json['error'] != null) throw Exception('RPC error: ${json['error']}');
-      return (json['result'] as Map<String, dynamic>)['value']['blockhash'] as String;
-    }
-  }
-
-  Future<List<int>> _buildTipTransaction({
-    required String ownerAddress,
-    required double amountSkr,
-    required String blockhash,
-  }) async {
-    final owner = Ed25519HDPublicKey.fromBase58(ownerAddress);
-    final mint = Ed25519HDPublicKey.fromBase58(_skrMint);
-
-    // Derive sender's associated token account (ATA)
-    final senderAta = await findAssociatedTokenAddress(owner: owner, mint: mint);
-    // Derive recipient ATA (tip destination - developer wallet)
-    const devAddress = '5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm';
-    final devPubkey = Ed25519HDPublicKey.fromBase58(devAddress);
-    final recipientAta = await findAssociatedTokenAddress(owner: devPubkey, mint: mint);
-
-    final amountRaw = (amountSkr * pow(10, _skrDecimals)).round();
-
-    // Create recipient ATA if it doesn't exist (idempotent - safe to include)
-    final createAtaIx = AssociatedTokenAccountInstruction.createAccountIdempotent(
-      funder: owner,
-      address: recipientAta,
-      owner: devPubkey,
-      mint: mint,
-    );
-
-    final transferIx = TokenInstruction.transfer(
-      source: senderAta,
-      destination: recipientAta,
-      owner: owner,
-      amount: amountRaw,
-      signers: [owner],
-    );
-
-    final message = Message(instructions: [createAtaIx, transferIx]);
-    final compiled = message.compile(
-      recentBlockhash: blockhash,
-      feePayer: owner,
-    );
-
-    // MWA signAndSendTransactions expects the serialized MESSAGE (the wallet
-    // appends signatures itself). Do NOT wrap into SignedTx with placeholder
-    // signatures — a full tx with zeroed sigs is mis-parsed as a native SOL
-    // transfer and fails to sign.
-    return compiled.toByteArray().toList();
-  }
-
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
