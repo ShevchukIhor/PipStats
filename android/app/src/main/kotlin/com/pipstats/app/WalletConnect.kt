@@ -38,11 +38,14 @@ object WalletConnect {
   @Volatile
   private var sender: ActivityResultSender? = null
 
-  /** Called from configureFlutterEngine — before the activity is STARTED. */
+  /**
+   * Called from configureFlutterEngine — before the activity is STARTED.
+   * Always recreate per Activity instance: a stale singleton launcher bound to
+   * a destroyed/recreated activity causes the MWA launch to fail with
+   * "Request was cancelled" / "Local association was cancelled before connected".
+   */
   fun attach(activity: ComponentActivity) {
-    if (sender == null) {
-      sender = ActivityResultSender(activity)
-    }
+    sender = ActivityResultSender(activity)
   }
 
   private fun prefs(context: Context) =
