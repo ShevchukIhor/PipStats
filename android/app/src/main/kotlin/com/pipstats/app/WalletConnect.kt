@@ -29,23 +29,20 @@ object WalletConnect {
 
   private val walletAdapter = MobileWalletAdapter(
     connectionIdentity = ConnectionIdentity(
-      identityUri = Uri.parse("https://pipstats.pages.dev/"),
-      iconUri = Uri.parse("https://pipstats.pages.dev/assets/logo-icon.png"),
-      identityName = "PipStats",
+      identityUri = Uri.parse("https://pipboy.skr"),
+      iconUri = Uri.parse("icon.png"),
+      identityName = "Pip-Boy Device Stats",
     ),
   )
 
   @Volatile
   private var sender: ActivityResultSender? = null
 
-  /**
-   * Called from configureFlutterEngine — before the activity is STARTED.
-   * Always recreate per Activity instance: a stale singleton launcher bound to
-   * a destroyed/recreated activity causes the MWA launch to fail with
-   * "Request was cancelled" / "Local association was cancelled before connected".
-   */
+  /** Called from configureFlutterEngine — before the activity is STARTED. */
   fun attach(activity: ComponentActivity) {
-    sender = ActivityResultSender(activity)
+    if (sender == null) {
+      sender = ActivityResultSender(activity)
+    }
   }
 
   private fun prefs(context: Context) =
@@ -174,7 +171,6 @@ object WalletConnect {
     CoroutineScope(Dispatchers.Main).launch {
       try {
         val txBytes = ByteArray(messageBytes.size) { i -> messageBytes[i].toByte() }
-        Log.d(TAG, "tip tx base64: " + android.util.Base64.encodeToString(txBytes, android.util.Base64.NO_WRAP))
         val payload = walletAdapter.transact(s) {
           signAndSendTransactions(arrayOf(txBytes))
         }
@@ -190,7 +186,7 @@ object WalletConnect {
             result.error("NO_WALLET", payload.message, null)
           }
           is TransactionResult.Failure -> {
-            Log.e(TAG, "tip send failure: ${payload.message}", payload.e)
+            Log.w(TAG, "tip send failure: ${payload.message}", payload.e)
             result.error("SEND_FAILED", "${payload.message}: ${payload.e.message}", null)
           }
         }
