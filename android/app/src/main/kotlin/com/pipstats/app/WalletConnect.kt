@@ -171,6 +171,7 @@ object WalletConnect {
     CoroutineScope(Dispatchers.Main).launch {
       try {
         val txBytes = ByteArray(messageBytes.size) { i -> messageBytes[i].toByte() }
+        Log.d(TAG, "tip tx base64: " + android.util.Base64.encodeToString(txBytes, android.util.Base64.NO_WRAP))
         val payload = walletAdapter.transact(s) {
           signAndSendTransactions(arrayOf(txBytes))
         }
@@ -186,7 +187,7 @@ object WalletConnect {
             result.error("NO_WALLET", payload.message, null)
           }
           is TransactionResult.Failure -> {
-            Log.w(TAG, "tip send failure: ${payload.message}", payload.e)
+            Log.e(TAG, "tip send failure: ${payload.message}", payload.e)
             result.error("SEND_FAILED", "${payload.message}: ${payload.e.message}", null)
           }
         }
