@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:solana/encoder.dart' show SignedTx;
 import 'package:solana/solana.dart';
 
 import 'base58.dart';
@@ -75,17 +74,10 @@ class RevokeService {
       feePayer: owner,
     );
 
-    // Serialize a full unsigned transaction (signatures section + message).
-    // The MWA `signAndSendTransactions` expects a serialized transaction, not
-    // a bare message, so we prepend placeholder signature slots.
-    final signatures = List<Signature>.generate(
-      compiled.requiredSignatureCount,
-      (_) => Signature(List<int>.filled(64, 0), publicKey: owner),
-    );
-    return SignedTx(
-      signatures: signatures,
-      compiledMessage: compiled,
-    ).toByteArray().toList();
+    // MWA `signAndSendTransactions` expects the serialized MESSAGE (the wallet
+    // appends signatures itself). Do NOT prepend placeholder signatures — a full
+    // tx with zeroed sigs is mis-parsed and fails to sign.
+    return compiled.toByteArray().toList();
   }
 
   /// Build the unsigned revoke transaction message bytes and submit it to the

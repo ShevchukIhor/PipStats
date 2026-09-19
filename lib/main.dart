@@ -9,7 +9,6 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:http/http.dart' as http;
 import 'package:solana/solana.dart';
-import 'package:solana/encoder.dart' show SignedTx;
 
 import 'stats_db.dart';
 import 'stats_service.dart';
@@ -23,7 +22,7 @@ import 'base58.dart';
 import 'l10n/app_localizations.dart';
 
 const String _skrMint = 'SKRskrmtL83pcL4YqLWt6iPefDqwXQWHSw9S9vz94BZ';
-const int _skrDecimals = 9;
+const int _skrDecimals = 6;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -2514,15 +2513,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       feePayer: owner,
     );
 
-    // Serialize unsigned transaction with placeholder signatures
-    final signatures = List<Signature>.generate(
-      compiled.requiredSignatureCount,
-      (_) => Signature(List<int>.filled(64, 0), publicKey: owner),
-    );
-    return SignedTx(
-      signatures: signatures,
-      compiledMessage: compiled,
-    ).toByteArray().toList();
+    // MWA signAndSendTransactions expects the serialized MESSAGE (the wallet
+    // appends signatures itself). Do NOT wrap into SignedTx with placeholder
+    // signatures — a full tx with zeroed sigs is mis-parsed as a native SOL
+    // transfer and fails to sign.
+    return compiled.toByteArray().toList();
   }
 
   void _showSnack(String msg) {
