@@ -29,9 +29,9 @@ object WalletConnect {
 
   private val walletAdapter = MobileWalletAdapter(
     connectionIdentity = ConnectionIdentity(
-      identityUri = Uri.parse("https://pipboy.skr"),
-      iconUri = Uri.parse("icon.png"),
-      identityName = "Pip-Boy Device Stats",
+      identityUri = Uri.parse("https://pipstats.pages.dev/"),
+      iconUri = Uri.parse("https://pipstats.pages.dev/assets/logo-icon.png"),
+      identityName = "PipStats",
     ),
   )
 
