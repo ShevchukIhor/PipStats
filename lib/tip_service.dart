@@ -96,8 +96,9 @@ class TipService {
 
     final session = await LocalAssociationScenario.create();
     try {
-      final client = await session.start();
+      // Launch the wallet sheet FIRST, then wait for the WS connection.
       await session.startActivityForResult(null);
+      final client = await session.start();
 
       final auth = await client.authorize(
         identityUri: Uri.parse('https://pipstats.pages.dev/'),
