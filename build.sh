@@ -4,7 +4,7 @@
 
 set -e
 
-INSTALL=false
+INSTALL=true
 FLUTTER_ARGS=()
 for arg in "$@"; do
   case $arg in
