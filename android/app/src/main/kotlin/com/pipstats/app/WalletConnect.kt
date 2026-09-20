@@ -115,6 +115,16 @@ object WalletConnect {
     }
   }
 
+  /** Persist a wallet address (used after Dart-side plugin authorize). */
+  fun persistWallet(context: Context, pubkey: ByteArray, label: String?) {
+    persist(context, pubkey, label)
+  }
+
+  /** Clear the persisted wallet address. */
+  fun clearWallet(context: Context) {
+    clear(context)
+  }
+
   /** Revoke authorization and clear any persisted session. */
   fun deauthorize(activity: ComponentActivity, result: MethodChannel.Result) {
     val s = sender ?: ActivityResultSender(activity).also { sender = it }

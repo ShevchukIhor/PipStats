@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:battery_plus/battery_plus.dart';
-import 'tip_service.dart';
 
 import 'stats_db.dart';
 import 'stats_service.dart';
@@ -2410,7 +2409,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     try {
       debugPrint('TIP: sending via solana_mobile_client (mainnet cluster)');
-      final sig = await TipService().sendTip(
+      final sig = await WalletAuthService.instance.sendTip(
         amountSkr: amountSkr,
         senderAddress: _walletAddress!,
       );

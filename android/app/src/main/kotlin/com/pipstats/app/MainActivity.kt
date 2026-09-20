@@ -86,6 +86,19 @@ class MainActivity : FlutterFragmentActivity() {
           "restoreWallet" -> {
             result.success(WalletConnect.saved(this))
           }
+          "persistWallet" -> {
+            val bytes = call.argument<List<Int>>("pubkey_bytes")
+            if (bytes == null) {
+              result.error("BAD_ARGS", "pubkey_bytes missing", null)
+            } else {
+              WalletConnect.persistWallet(this, bytes.map { it.toByte() }.toByteArray(), call.argument<String>("label"))
+              result.success(null)
+            }
+          }
+          "clearWallet" -> {
+            WalletConnect.clearWallet(this)
+            result.success(null)
+          }
           "deauthorize" -> {
             WalletConnect.deauthorize(this, result)
           }
