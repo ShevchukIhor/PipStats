@@ -3,9 +3,11 @@ import 'dart:developer';
 import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:solana/solana.dart' show Ed25519HDPublicKey;
 
 import 'base58.dart';
-import 'rpc_config.dart';
+import 'package:pipstats/constants.dart';
+import 'package:pipstats/rpc_config.dart';
 
 /// Test/override hook for the Jupiter price endpoint (mirrors rpcOverride).
 String? priceApiOverride;
@@ -22,11 +24,17 @@ class SolScanService {
       {};
   static final Map<String, _CacheEntry<List<AssetInfo>>> _assetsCache = {};
 
-  static const String tokenProgram =
-      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
-  static const String token2022Program =
-      'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
-  static const String solMint = 'So11111111111111111111111111111111111111112';
+  static const String tokenProgram = SolanaConstants.tokenProgram;
+  static const String token2022Program = SolanaConstants.token2022Program;
+  static const String solMint = SolanaConstants.solMint;
+
+  /// Metaplex Token Metadata program — the on-chain source of token and NFT
+  /// names/symbols. Reading it directly replaces Helius DAS and needs no API
+  /// key: it works on any RPC, including the free public one.
+  static const String metadataProgram =
+      'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
+
+  static final Map<String, _CacheEntry<TokenMetadata?>> _metadataCache = {};
 
   /// Well-known program IDs -> human-readable protocol name.
   static const Map<String, String> knownPrograms = {
@@ -61,7 +69,7 @@ class SolScanService {
     return id.length <= 8 ? id : '${id.substring(0, 8)}…';
   }
 
-  Future<Map<String, dynamic>> _call(
+  Future<Map<String, dynamic>> call(
     String method,
     List<dynamic> params,
   ) async {
@@ -75,23 +83,8 @@ class SolScanService {
     );
   }
 
-  /// RPC call where params is a single JSON object (Helius DAS API shape).
-  Future<Map<String, dynamic>> _callObj(
-    String method,
-    Map<String, dynamic> params,
-  ) async {
-    return _post(
-      jsonEncode({
-        'jsonrpc': '2.0',
-        'id': 1,
-        'method': method,
-        'params': params,
-      }),
-    );
-  }
-
   static const String _userAgent = 'device_stats/1.0';
-  static const Duration _backoff = Duration(milliseconds: 500);
+  static const Duration _backoff = SolanaConstants.retryBackoff;
 
   /// Sends [request], retrying once after [_backoff] on 429/5xx.
   Future<http.Response> _withRetry(
@@ -119,7 +112,7 @@ class SolScanService {
             },
             body: body,
           )
-          .timeout(const Duration(seconds: 20)),
+          .timeout(SolanaConstants.rpcTimeout),
     );
     if (resp.statusCode != 200) {
       throw Exception('RPC HTTP ${resp.statusCode}');
@@ -156,7 +149,7 @@ class SolScanService {
               'params': params,
             }),
           )
-          .timeout(const Duration(seconds: 20)),
+          .timeout(SolanaConstants.rpcTimeout),
     );
     if (resp.statusCode != 200) {
       throw Exception('RPC HTTP ${resp.statusCode}');
@@ -178,7 +171,7 @@ class SolScanService {
 
   /// SOL balance (lamports).
   Future<int> getBalanceLamports(String address) async {
-    final r = await _call('getBalance', [address]);
+    final r = await call('getBalance', [address]);
     final value = r['value'];
     if (value is! num) {
       throw FormatException('getBalance: unexpected value shape');
@@ -186,10 +179,44 @@ class SolScanService {
     return value.toInt();
   }
 
+  /// Recent blockhash, required to compile a transaction message.
+  /// Uses `finalized` so the hash stays valid for the full MWA round-trip
+  /// (the user may take a while to approve in the wallet).
+  Future<String> getLatestBlockhash() async {
+    final r = await call('getLatestBlockhash', [
+      {'commitment': 'finalized'},
+    ]);
+    final value = r['value'];
+    if (value is! Map) {
+      throw FormatException('getLatestBlockhash: unexpected value shape');
+    }
+    final blockhash = value['blockhash'];
+    if (blockhash is! String || blockhash.isEmpty) {
+      throw FormatException('getLatestBlockhash: missing blockhash');
+    }
+    return blockhash;
+  }
+
+  /// Decimals declared by an SPL Token mint, or null when the account is
+  /// missing or too short.
+  ///
+  /// Mint layout (`spl_token::state::Mint`, fixed 82 bytes):
+  /// `mint_authority` `COption<Pubkey>` [0..36), `supply` u64 [36..44),
+  /// `decimals` u8 @44, `is_initialized` @45, `freeze_authority` [46..82).
+  ///
+  /// Never hardcode a token's decimals: `transferChecked` verifies them
+  /// on-chain and rejects the instruction on a mismatch, and a wrong value
+  /// scales the transferred amount by a power of ten.
+  Future<int?> getMintDecimals(String mint) async {
+    final data = await getAccountInfoBytes(mint);
+    if (data == null || data.length < 45) return null;
+    return data[44];
+  }
+
   /// Raw account data (decoded from base64) for an address, or null if the
   /// account does not exist.
   Future<Uint8List?> getAccountInfoBytes(String address) async {
-    final r = await _call('getAccountInfo', [
+    final r = await call('getAccountInfo', [
       address,
       {'encoding': 'base64'},
     ]);
@@ -205,14 +232,14 @@ class SolScanService {
   /// Owner of the largest token account for a mint, resolved through the
   /// parsed token-account schema. Returns a base58 address or null.
   Future<String?> getTokenLargestOwner(String mint) async {
-    final r = await _call('getTokenLargestAccounts', [mint]);
+    final r = await call('getTokenLargestAccounts', [mint]);
     final value = r['value'];
     if (value is! List || value.isEmpty) return null;
     final top = value.first;
     if (top is! Map) return null;
     final addr = top['address'];
     if (addr is! String) return null;
-    final pr = await _call('getAccountInfo', [
+    final pr = await call('getAccountInfo', [
       addr,
       {'encoding': 'jsonParsed'},
     ]);
@@ -247,7 +274,7 @@ class SolScanService {
       final resp = await _withRetry(
         () => http
             .get(url, headers: {'User-Agent': _userAgent})
-            .timeout(const Duration(seconds: 20)),
+            .timeout(SolanaConstants.rpcTimeout),
       );
       if (resp.statusCode != 200) return null;
       final json = jsonDecode(resp.body);
@@ -267,7 +294,7 @@ class SolScanService {
       }
       _priceCache[key] = _CacheEntry(
         out,
-        DateTime.now().add(const Duration(seconds: 30)),
+        DateTime.now().add(SolanaConstants.cacheDuration),
       );
       return out;
     } catch (e) {
@@ -281,7 +308,7 @@ class SolScanService {
     String address, {
     String programId = tokenProgram,
   }) async {
-    final r = await _call('getTokenAccountsByOwner', [
+    final r = await call('getTokenAccountsByOwner', [
       address,
       {'programId': programId},
       {'encoding': 'base64'},
@@ -307,59 +334,165 @@ class SolScanService {
     return <Map<String, dynamic>>[...legacy, ...token2022];
   }
 
-  /// Rich asset list via Helius DAS (fungible tokens + NFTs with metadata).
-  /// Results are cached for 30s per address.
+  /// Raw account data for many addresses in one round-trip.
+  /// Returns a list positionally aligned with [addresses]; missing accounts
+  /// come back as null. Chunked to stay inside RPC per-request limits.
+  Future<List<Uint8List?>> getMultipleAccountsBytes(
+    List<String> addresses,
+  ) async {
+    final out = <Uint8List?>[];
+    const chunkSize = 100;
+    for (var i = 0; i < addresses.length; i += chunkSize) {
+      final chunk = addresses.sublist(
+        i,
+        i + chunkSize > addresses.length ? addresses.length : i + chunkSize,
+      );
+      final r = await call('getMultipleAccounts', [
+        chunk,
+        {'encoding': 'base64'},
+      ]);
+      final value = r['value'];
+      if (value is! List) {
+        out.addAll(List<Uint8List?>.filled(chunk.length, null));
+        continue;
+      }
+      for (var j = 0; j < chunk.length; j++) {
+        final item = j < value.length ? value[j] : null;
+        if (item is! Map) {
+          out.add(null);
+          continue;
+        }
+        final data = item['data'];
+        if (data is List && data.isNotEmpty && data[0] is String) {
+          try {
+            out.add(base64Decode(data[0] as String));
+          } catch (_) {
+            out.add(null);
+          }
+        } else {
+          out.add(null);
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Metaplex metadata PDA for [mint]: seeds `["metadata", program, mint]`.
+  static Future<String> metadataAddress(String mint) async {
+    final program = Ed25519HDPublicKey.fromBase58(metadataProgram);
+    final pda = await Ed25519HDPublicKey.findProgramAddress(
+      seeds: [
+        utf8.encode('metadata'),
+        program.bytes,
+        Ed25519HDPublicKey.fromBase58(mint).bytes,
+      ],
+      programId: program,
+    );
+    return pda.toBase58();
+  }
+
+  /// On-chain name/symbol/uri for each mint that has a metadata account.
+  /// Mints without metadata are simply absent from the result.
+  Future<Map<String, TokenMetadata>> getTokenMetadata(
+    List<String> mints,
+  ) async {
+    final unique = mints.where((m) => m.isNotEmpty).toSet().toList();
+    final out = <String, TokenMetadata>{};
+    final pending = <String>[];
+    final now = DateTime.now();
+    for (final mint in unique) {
+      final cached = _metadataCache[mint];
+      if (cached != null && cached.expires.isAfter(now)) {
+        final value = cached.value;
+        if (value != null) out[mint] = value;
+      } else {
+        pending.add(mint);
+      }
+    }
+    if (pending.isEmpty) return out;
+
+    final pdas = <String>[];
+    for (final mint in pending) {
+      pdas.add(await metadataAddress(mint));
+    }
+    final accounts = await getMultipleAccountsBytes(pdas);
+    // Metadata is effectively immutable for established tokens; an hour of
+    // caching keeps the vault from re-reading it on every refresh.
+    final expires = DateTime.now().add(const Duration(hours: 1));
+    for (var i = 0; i < pending.length; i++) {
+      final data = i < accounts.length ? accounts[i] : null;
+      final meta = data == null ? null : TokenMetadata.decode(data);
+      _metadataCache[pending[i]] = _CacheEntry(meta, expires);
+      if (meta != null) out[pending[i]] = meta;
+    }
+    return out;
+  }
+
+  /// Token and NFT holdings for a wallet, assembled entirely from on-chain
+  /// reads: token accounts for balances, mint accounts for decimals/supply,
+  /// and Metaplex metadata accounts for names and symbols.
   ///
-  /// Returns `[]` (empty) when running against a non-DAS RPC (no Helius key)
-  /// — token/NFT metadata simply comes back empty rather than erroring.
+  /// This replaces Helius DAS (`getAssetsByOwner`) and needs no API key.
+  /// The one thing it cannot see is compressed NFTs, which live in Merkle
+  /// trees rather than accounts and are only exposed through a DAS provider.
+  /// Results are cached for 30s per address.
   Future<List<AssetInfo>> getAssets(String address) async {
-    if (!dasAvailable) return [];
     final cached = _assetsCache[address];
     if (cached != null && cached.expires.isAfter(DateTime.now())) {
       return cached.value;
     }
-    final r = await _callObj('getAssetsByOwner', {
-      'ownerAddress': address,
-      'page': 1,
-      'limit': 1000,
-      'displayOptions': {'showFungible': true},
-    });
-    final items = r['items'];
-    final out = <AssetInfo>[];
-    if (items is List) {
-      for (final it in items) {
-        if (it is! Map<String, dynamic>) continue;
-        final m = it;
-        final content = m['content'];
-        final metaRaw = content is Map ? content['metadata'] : null;
-        final meta = metaRaw is Map ? metaRaw : const <String, dynamic>{};
-        final tokenInfoRaw = m['token_info'];
-        final tokenInfo =
-            tokenInfoRaw is Map ? tokenInfoRaw : const <String, dynamic>{};
-        final id = m['id'];
-        final iface = m['interface'];
-        final name = meta['name'];
-        final symbol = meta['symbol'];
-        final balance = tokenInfo['balance'];
-        final decimals = tokenInfo['decimals'];
-        final compRaw = m['compression'];
-        final compressed = compRaw is Map ? compRaw['compressed'] : null;
-        out.add(
-          AssetInfo(
-            id: id is String ? id : '',
-            interface: iface is String ? iface : '',
-            name: name is String ? name : '',
-            symbol: symbol is String ? symbol : '',
-            balance: balance == null ? '' : balance.toString(),
-            decimals: decimals is num ? decimals.toInt() : 0,
-            burnt: m['burnt'] == true,
-            compressed: compressed == true,
-          ),
-        );
-      }
+
+    final raw = await getAllTokenAccountsRaw(address);
+    final balances = <String, int>{};
+    for (final item in raw) {
+      final account = item['account'];
+      if (account is! Map) continue;
+      final data = account['data'];
+      if (data is! List || data.isEmpty || data[0] is! String) continue;
+      final info = parseTokenAccount(base64Decode(data[0] as String));
+      if (info == null || info.amount <= 0) continue;
+      balances[info.mint] = (balances[info.mint] ?? 0) + info.amount;
     }
+    if (balances.isEmpty) {
+      _assetsCache[address] = _CacheEntry(
+        const <AssetInfo>[],
+        DateTime.now().add(SolanaConstants.cacheDuration),
+      );
+      return const <AssetInfo>[];
+    }
+
+    final mints = balances.keys.toList();
+    final mintAccounts = await getMultipleAccountsBytes(mints);
+    final metadata = await getTokenMetadata(mints);
+
+    final out = <AssetInfo>[];
+    for (var i = 0; i < mints.length; i++) {
+      final mint = mints[i];
+      final mintData = i < mintAccounts.length ? mintAccounts[i] : null;
+      final decimals =
+          mintData != null && mintData.length > 44 ? mintData[44] : 0;
+      final supply =
+          mintData != null && mintData.length >= 44 ? _u64le(mintData, 36) : 0;
+      final meta = metadata[mint];
+      // A mint with no decimals and a supply of one is an NFT; everything
+      // else is treated as fungible.
+      final isNft = decimals == 0 && supply == 1;
+      out.add(
+        AssetInfo(
+          id: mint,
+          interface: isNft ? 'V1_NFT' : 'FungibleToken',
+          name: meta?.name ?? '',
+          symbol: meta?.symbol ?? '',
+          balance: '${balances[mint]}',
+          decimals: decimals,
+          burnt: false,
+          compressed: false,
+        ),
+      );
+    }
+    out.sort((a, b) => a.symbol.compareTo(b.symbol));
     _assetsCache[address] =
-        _CacheEntry(out, DateTime.now().add(const Duration(seconds: 30)));
+        _CacheEntry(out, DateTime.now().add(SolanaConstants.cacheDuration));
     return out;
   }
 
@@ -372,20 +505,7 @@ class SolScanService {
     final out = <TxInfo>[];
     for (final m in list) {
       if (m is! Map<String, dynamic>) continue;
-      final mm = m;
-      final signature = mm['signature'];
-      final slot = mm['slot'];
-      final blockTime = mm['blockTime'];
-      final memo = mm['memo'];
-      out.add(
-        TxInfo(
-          signature: signature is String ? signature : '',
-          slot: slot is num ? slot.toInt() : 0,
-          err: mm['err'],
-          blockTime: blockTime is num ? blockTime.toInt() : 0,
-          memo: memo is String ? memo : null,
-        ),
-      );
+      out.add(TxInfo.fromMap(m));
     }
     return out;
   }
@@ -393,7 +513,7 @@ class SolScanService {
   /// Enriched details for a single signature: fee (SOL), involved program
   /// names, all parsed SPL token transfers and native SOL transfers.
   Future<TxDetail> getTransactionDetail(String signature) async {
-    final r = await _call('getTransaction', [
+     final r = await call('getTransaction', [
       signature,
       {'encoding': 'jsonParsed', 'maxSupportedTransactionVersion': 0},
     ]);
@@ -492,65 +612,93 @@ class _CacheEntry<T> {
   _CacheEntry(this.value, this.expires);
 }
 
-/// Borsh decode of an SPL Token Account base layout.
+/// Byte offsets of the SPL Token account layout (`spl_token::state::Account`).
 ///
-/// Little-endian, no padding; Option fields are 1-byte tags
-/// (0x00 = None, 0x01 = Some). The base struct is 92 bytes when empty,
-/// 124 with one Option populated, and 156 with both populated.
-/// Token-2022 accounts append extension data after the base struct,
-/// which is ignored here.
-TokenAccountInfo? parseTokenAccount(Uint8List d) {
-  if (d.length < 92) return null;
-  int c = 0;
-  final mint = base58Encode(d.sublist(c, c + 32));
-  c += 32;
-  final owner = base58Encode(d.sublist(c, c + 32));
-  c += 32;
-  final amount = _readU64(d, c);
-  c += 8;
-  final delegateTag = d[c];
-  c += 1;
-  String? delegate;
-  if (delegateTag == 1) {
-    if (c + 32 > d.length) return null;
-    delegate = base58Encode(d.sublist(c, c + 32));
-    c += 32;
-  }
-  final state = d[c];
-  c += 1;
-  final delegatedAmount = _readU64(d, c);
-  c += 8;
-  final closeAuthorityTag = d[c];
-  c += 1;
-  String? closeAuthority;
-  if (closeAuthorityTag == 1) {
-    if (c + 32 > d.length) return null;
-    closeAuthority = base58Encode(d.sublist(c, c + 32));
-    c += 32;
-  }
-  final isNative = d[c] != 0;
-  c += 1;
-  if (c + 8 > d.length) return null;
-  final nativeAmount = _readU64(d, c);
-  return TokenAccountInfo(
-    mint: mint,
-    owner: owner,
-    amount: amount,
-    delegate: delegate,
-    state: state,
-    delegatedAmount: delegatedAmount,
-    closeAuthority: closeAuthority,
-    isNative: isNative,
-    nativeAmount: nativeAmount,
-  );
+/// The account is serialized with the program's `Pack` impl, **not** Borsh:
+/// every field is fixed-width and each `COption` carries a **4-byte** little
+/// endian u32 tag (0 = None, 1 = Some) followed by the value, present or not.
+/// A live token account is therefore always exactly [size] bytes.
+///
+/// ```text
+///   mint              32  [0..32)
+///   owner             32  [32..64)
+///   amount             8  [64..72)    u64 LE
+///   delegate          36  [72..108)   COption<Pubkey>: tag @72,  key   @76
+///   state              1  [108]       0=Uninitialized 1=Initialized 2=Frozen
+///   is_native         12  [109..121)  COption<u64>:    tag @109, value @113
+///   delegated_amount   8  [121..129)  u64 LE
+///   close_authority   36  [129..165)  COption<Pubkey>: tag @129, key   @133
+/// ```
+///
+/// Note the ordering: `is_native` sits **between** `state` and
+/// `delegated_amount`. Token-2022 accounts reuse this base and append
+/// extensions after byte 165, so a length check must be `>=`, not `==`.
+class TokenAccountLayout {
+  static const int mint = 0;
+  static const int owner = 32;
+  static const int amount = 64;
+  static const int delegateTag = 72;
+  static const int delegate = 76;
+  static const int state = 108;
+  static const int isNativeTag = 109;
+  static const int nativeAmount = 113;
+  static const int delegatedAmount = 121;
+  static const int closeAuthorityTag = 129;
+  static const int closeAuthority = 133;
+
+  /// Serialized size of the base account.
+  static const int size = 165;
+
+  TokenAccountLayout._();
 }
 
-int _readU64(Uint8List d, int off) {
-  int v = 0;
-  for (int i = 0; i < 8; i++) {
-    v |= d[off + i] << (8 * i);
+int _u32le(Uint8List d, int o) =>
+    d[o] | (d[o + 1] << 8) | (d[o + 2] << 16) | (d[o + 3] << 24);
+
+/// Reads a little-endian u64.
+///
+/// Dart's `int` is 64-bit **signed**, so a value above 2^63-1 would wrap to a
+/// negative number and render as a negative balance. Such supplies are
+/// vanishingly rare but not impossible, so the top-bit case is saturated
+/// instead: a clamped maximum is wrong by a knowable amount, a negative
+/// balance is wrong in a way that looks like a different bug.
+int _u64le(Uint8List d, int o) {
+  var v = 0;
+  for (var i = 0; i < 7; i++) {
+    v |= d[o + i] << (8 * i);
   }
-  return v;
+  final top = d[o + 7];
+  if (top & 0x80 != 0) return 0x7FFFFFFFFFFFFFFF;
+  return v | (top << 56);
+}
+
+String _pubkey(Uint8List d, int o) => base58Encode(d.sublist(o, o + 32));
+
+/// Decodes an SPL Token (or Token-2022) account from its raw account data.
+///
+/// Returns null when the buffer is too short to be a token account.
+TokenAccountInfo? parseTokenAccount(Uint8List d) {
+  if (d.length < TokenAccountLayout.size) return null;
+  try {
+    final hasDelegate = _u32le(d, TokenAccountLayout.delegateTag) == 1;
+    final isNative = _u32le(d, TokenAccountLayout.isNativeTag) == 1;
+    final hasClose = _u32le(d, TokenAccountLayout.closeAuthorityTag) == 1;
+
+    return TokenAccountInfo(
+      mint: _pubkey(d, TokenAccountLayout.mint),
+      owner: _pubkey(d, TokenAccountLayout.owner),
+      amount: _u64le(d, TokenAccountLayout.amount),
+      delegate: hasDelegate ? _pubkey(d, TokenAccountLayout.delegate) : null,
+      state: d[TokenAccountLayout.state],
+      delegatedAmount: _u64le(d, TokenAccountLayout.delegatedAmount),
+      closeAuthority:
+          hasClose ? _pubkey(d, TokenAccountLayout.closeAuthority) : null,
+      isNative: isNative,
+      nativeAmount: isNative ? _u64le(d, TokenAccountLayout.nativeAmount) : 0,
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 class TokenAccountInfo {
@@ -583,7 +731,49 @@ class TokenAccountInfo {
       closeAuthority != null && closeAuthority!.isNotEmpty;
 }
 
-/// A single asset (fungible token or NFT) from Helius DAS.
+/// Name, symbol and metadata URI from a Metaplex Token Metadata account.
+///
+/// Account layout: `key` u8 @0, `update_authority` @1, `mint` @33, then three
+/// Borsh strings — name, symbol, uri. Metaplex pads them with NUL to fixed
+/// widths, so trailing NULs are trimmed.
+class TokenMetadata {
+  final String name;
+  final String symbol;
+  final String uri;
+
+  const TokenMetadata({
+    required this.name,
+    required this.symbol,
+    required this.uri,
+  });
+
+  static TokenMetadata? decode(Uint8List d) {
+    try {
+      var offset = 1 + 32 + 32;
+      String readString() {
+        final length = _u32le(d, offset);
+        offset += 4;
+        if (length > d.length - offset) throw const FormatException('bad len');
+        final bytes = d.sublist(offset, offset + length);
+        offset += length;
+        return utf8
+            .decode(bytes, allowMalformed: true)
+            .replaceAll('\u0000', '')
+            .trim();
+      }
+
+      final name = readString();
+      final symbol = readString();
+      final uri = readString();
+      if (name.isEmpty && symbol.isEmpty) return null;
+      return TokenMetadata(name: name, symbol: symbol, uri: uri);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// A single asset (fungible token or NFT) held by a wallet.
 class AssetInfo {
   final String id; // mint address (fungible) or asset id (NFT)
   final String interface;
@@ -604,6 +794,23 @@ class AssetInfo {
     required this.burnt,
     required this.compressed,
   });
+
+  factory AssetInfo.fromMap(Map<String, dynamic> m) {
+    final content = m['content'] as Map?;
+    final meta = content?['metadata'] as Map? ?? const <String, dynamic>{};
+    final tokenInfo = m['token_info'] as Map? ?? const <String, dynamic>{};
+
+    return AssetInfo(
+      id: m['id'] is String ? m['id'] : '',
+      interface: m['interface'] is String ? m['interface'] : '',
+      name: meta['name'] is String ? meta['name'] : '',
+      symbol: meta['symbol'] is String ? meta['symbol'] : '',
+      balance: tokenInfo['balance']?.toString() ?? '',
+      decimals: tokenInfo['decimals'] is num ? (tokenInfo['decimals'] as num).toInt() : 0,
+      burnt: m['burnt'] == true,
+      compressed: m['compression']?['compressed'] == true,
+    );
+  }
 
   bool get isFungible =>
       interface == 'FungibleToken' || interface == 'FungibleAsset';
@@ -646,6 +853,18 @@ class TxInfo {
     required this.blockTime,
     required this.memo,
   });
+
+  factory TxInfo.fromMap(Map<String, dynamic> m) {
+    return TxInfo(
+      signature: m['signature'] is String ? m['signature'] : '',
+      slot: m['slot'] is num ? (m['slot'] as num).toInt() : 0,
+      err: m['err'],
+      blockTime: (m['blockTime'] ?? m['block_time']) is num
+          ? (m['blockTime'] ?? m['block_time'] as num).toInt()
+          : 0,
+      memo: m['memo'] is String ? m['memo'] : null,
+    );
+  }
 
   bool get hasError => err != null;
 }

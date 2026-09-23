@@ -6,14 +6,14 @@ import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:solana/base58.dart' as sol_base58;
 
-import 'package:device_stats/base58.dart';
-import 'package:device_stats/domains.dart';
-import 'package:device_stats/rpc_config.dart';
-import 'package:device_stats/solscan_service.dart';
-import 'package:device_stats/stats_db.dart';
-import 'package:device_stats/revoke.dart';
-import 'package:device_stats/main.dart';
-import 'package:device_stats/wallet_auth.dart';
+import 'package:pipstats/base58.dart';
+import 'package:pipstats/domains.dart';
+import 'package:pipstats/rpc_config.dart';
+import 'package:pipstats/solscan_service.dart';
+import 'package:pipstats/stats_db.dart';
+import 'package:pipstats/revoke.dart';
+import 'package:pipstats/main.dart';
+import 'package:pipstats/wallet_auth.dart';
 
 void main() {
   group('base58Encode', () {
@@ -47,109 +47,142 @@ void main() {
   });
 
   group('parseTokenAccount', () {
-    List<int> u64le(int v) =>
-        List<int>.generate(8, (i) => (v >> (8 * i)) & 0xff);
+    // Fixtures follow the real `spl_token::state::Account` Pack layout:
+    // fixed 165 bytes, 4-byte little-endian COption tags, and `is_native`
+    // positioned between `state` and `delegated_amount`.
+    void u32le(Uint8List b, int o, int v) {
+      for (var i = 0; i < 4; i++) {
+        b[o + i] = (v >> (8 * i)) & 0xff;
+      }
+    }
+
+    void u64le(Uint8List b, int o, int v) {
+      for (var i = 0; i < 8; i++) {
+        b[o + i] = (v >> (8 * i)) & 0xff;
+      }
+    }
+
+    final mintBytes = List<int>.filled(32, 7);
+    final ownerBytes = List<int>.filled(32, 9);
+    final delegateBytes = List<int>.generate(32, (i) => (i * 5 + 3) & 0xff);
+    final closeBytes = List<int>.generate(32, (i) => (i * 11 + 1) & 0xff);
 
     Uint8List build({
       int amount = 0,
-      int delegatedAmount = 0,
-      int delegateTag = 0,
       List<int>? delegate,
       int state = 1,
-      int closeAuthorityTag = 0,
+      int? nativeAmount, // null => is_native is None
+      int delegatedAmount = 0,
       List<int>? closeAuthority,
-      bool isNative = false,
-      int nativeAmount = 0,
+      int extensionBytes = 0, // Token-2022 appends after the base
     }) {
-      final bytes = <int>[
-        ...List.filled(32, 7), // mint
-        ...List.filled(32, 9), // owner
-        ...u64le(amount),
-        delegateTag,
-        if (delegateTag == 1) ...(delegate ?? List.filled(32, 5)),
-        state,
-        ...u64le(delegatedAmount),
-        closeAuthorityTag,
-        if (closeAuthorityTag == 1) ...(closeAuthority ?? List.filled(32, 8)),
-        isNative ? 1 : 0,
-        ...u64le(nativeAmount),
-      ];
-      return Uint8List.fromList(bytes);
+      final b = Uint8List(165 + extensionBytes);
+      b.setRange(0, 32, mintBytes);
+      b.setRange(32, 64, ownerBytes);
+      u64le(b, 64, amount);
+      if (delegate != null) {
+        u32le(b, 72, 1);
+        b.setRange(76, 108, delegate);
+      }
+      b[108] = state;
+      if (nativeAmount != null) {
+        u32le(b, 109, 1);
+        u64le(b, 113, nativeAmount);
+      }
+      u64le(b, 121, delegatedAmount);
+      if (closeAuthority != null) {
+        u32le(b, 129, 1);
+        b.setRange(133, 165, closeAuthority);
+      }
+      return b;
     }
 
-    test('returns null when too short', () {
-      expect(parseTokenAccount(Uint8List(91)), isNull);
+    test('returns null when shorter than the 165-byte base layout', () {
+      expect(parseTokenAccount(Uint8List(164)), isNull);
+      expect(parseTokenAccount(Uint8List(92)), isNull);
+      expect(parseTokenAccount(Uint8List(0)), isNull);
     });
 
-    test('decodes an empty account (92 bytes)', () {
-      final d = build(amount: 123456, state: 1, delegatedAmount: 999);
-      expect(d.length, 92);
+    test('decodes a plain initialized account', () {
+      final d = build(amount: 123456, state: 1);
+      expect(d.length, 165);
       final info = parseTokenAccount(d)!;
+      expect(info.mint, base58Encode(Uint8List.fromList(mintBytes)));
+      expect(info.owner, base58Encode(Uint8List.fromList(ownerBytes)));
       expect(info.amount, 123456);
       expect(info.delegate, isNull);
       expect(info.hasDelegate, isFalse);
+      // The old 1-byte-tag reader returned 0 here for every real account,
+      // breaking frozen/initialized detection.
       expect(info.state, 1);
-      expect(info.delegatedAmount, 999);
+      expect(info.delegatedAmount, 0);
       expect(info.closeAuthority, isNull);
-      expect(info.hasCloseAuthority, isFalse);
       expect(info.isNative, isFalse);
       expect(info.nativeAmount, 0);
     });
 
-    test('decodes an account with a delegate (124 bytes)', () {
-      final delegate = List<int>.filled(32, 5);
-      final d = build(
-        amount: 42,
-        delegateTag: 1,
-        delegate: delegate,
-        state: 1,
-        delegatedAmount: 7,
-      );
-      expect(d.length, 124);
+    test('reads the delegate at offset 76, not shifted by the tag', () {
+      final d = build(amount: 42, delegate: delegateBytes, delegatedAmount: 7);
       final info = parseTokenAccount(d)!;
-      expect(info.delegate, base58Encode(Uint8List.fromList(delegate)));
       expect(info.hasDelegate, isTrue);
+      // The exact address matters: a 3-byte shift still yields a plausible
+      // looking base58 string while naming the wrong spender.
+      expect(info.delegate, base58Encode(Uint8List.fromList(delegateBytes)));
       expect(info.delegatedAmount, 7);
+      expect(info.state, 1);
     });
 
-    test('decodes an account with a close authority (124 bytes)', () {
-      final ca = List<int>.filled(32, 8);
-      final d = build(
-        amount: 1,
-        state: 1,
-        delegatedAmount: 0,
-        closeAuthorityTag: 1,
-        closeAuthority: ca,
-      );
-      expect(d.length, 124);
+    test('decodes a close authority', () {
+      final d = build(amount: 1, closeAuthority: closeBytes);
       final info = parseTokenAccount(d)!;
       expect(info.hasCloseAuthority, isTrue);
-      expect(info.closeAuthority, base58Encode(Uint8List.fromList(ca)));
+      expect(info.closeAuthority, base58Encode(Uint8List.fromList(closeBytes)));
     });
 
-    test('decodes an account with both options (156 bytes)', () {
-      final delegate = List<int>.filled(32, 5);
-      final ca = List<int>.filled(32, 8);
+    test('a close authority is still found when a delegate is present', () {
       final d = build(
         amount: 1,
-        delegateTag: 1,
-        delegate: delegate,
-        state: 1,
+        delegate: delegateBytes,
         delegatedAmount: 2,
-        closeAuthorityTag: 1,
-        closeAuthority: ca,
+        closeAuthority: closeBytes,
       );
-      expect(d.length, 156);
       final info = parseTokenAccount(d)!;
-      expect(info.hasDelegate, isTrue);
-      expect(info.hasCloseAuthority, isTrue);
+      expect(info.delegate, base58Encode(Uint8List.fromList(delegateBytes)));
+      expect(info.delegatedAmount, 2);
+      expect(info.closeAuthority, base58Encode(Uint8List.fromList(closeBytes)));
     });
 
-    test('reads is_native and native amount', () {
-      final d = build(amount: 5, state: 1, isNative: true, nativeAmount: 777);
+    test('wrapped SOL: is_native carries the rent-exempt reserve', () {
+      final d = build(amount: 5, nativeAmount: 2039280, delegatedAmount: 11);
       final info = parseTokenAccount(d)!;
       expect(info.isNative, isTrue);
-      expect(info.nativeAmount, 777);
+      expect(info.nativeAmount, 2039280);
+      // is_native sits *before* delegated_amount; reading them in the wrong
+      // order corrupts both.
+      expect(info.delegatedAmount, 11);
+    });
+
+    test('a frozen account reports state 2', () {
+      expect(parseTokenAccount(build(state: 2))!.state, 2);
+    });
+
+    test('a u64 amount above 2^63 saturates instead of going negative', () {
+      final d = build();
+      // amount = 0xFFFFFFFFFFFFFFFF
+      for (var i = 0; i < 8; i++) {
+        d[64 + i] = 0xff;
+      }
+      final info = parseTokenAccount(d)!;
+      expect(info.amount, isNonNegative);
+      expect(info.amount, 0x7FFFFFFFFFFFFFFF);
+    });
+
+    test('Token-2022 extensions after the base are ignored', () {
+      final d = build(amount: 99, delegate: delegateBytes, extensionBytes: 83);
+      expect(d.length, greaterThan(165));
+      final info = parseTokenAccount(d)!;
+      expect(info.amount, 99);
+      expect(info.delegate, base58Encode(Uint8List.fromList(delegateBytes)));
     });
   });
 
@@ -315,10 +348,11 @@ void main() {
         blockhash: blockhash,
       );
       expect(bytes, isNotEmpty);
-      // Serialized tx leads with the signature count; a single owner signer
-      // (fee payer) requires exactly one signature.
+      // Transaction wire format: signature count, one zeroed 64-byte slot for
+      // the wallet to fill, then the message.
       expect(bytes.first, 1);
-      expect(bytes.length, greaterThan(64)); // >= 1 sig (64B) + message
+      expect(bytes.sublist(1, 65), everyElement(0));
+      expect(bytes.length, greaterThan(65));
     });
 
     test('is deterministic for identical inputs', () {
@@ -469,23 +503,21 @@ void main() {
     int failStatus = 429;
     String balanceBody = '{"result":{"value":12345}}';
     String tokenAccountsBody = '{"result":{"value":[]}}';
-    String assetsBody = '{"result":{"items":[]}}';
+    String multipleAccountsBody = '{"result":{"value":[]}}';
     int priceStatus = 200;
     String priceBody = '{"data":{}}';
 
+    /// A real-shaped SPL token account: 165 bytes, no delegate, no close
+    /// authority, not native, state = Initialized.
     Uint8List emptyAccount(int amount) {
-      return Uint8List.fromList(<int>[
-        ...List.filled(32, 7),
-        ...List.filled(32, 9),
-        ...List.generate(8, (i) => (amount >> (8 * i)) & 0xff),
-        0,
-        1,
-        ...List.filled(8, 0),
-        0,
-        1,
-        0,
-        ...List.filled(8, 0),
-      ]);
+      final b = Uint8List(165);
+      b.setRange(0, 32, List.filled(32, 7)); // mint
+      b.setRange(32, 64, List.filled(32, 9)); // owner
+      for (var i = 0; i < 8; i++) {
+        b[64 + i] = (amount >> (8 * i)) & 0xff;
+      }
+      b[108] = 1; // state: Initialized
+      return b;
     }
 
     setUp(() async {
@@ -496,7 +528,7 @@ void main() {
       failStatus = 429;
       balanceBody = '{"result":{"value":12345}}';
       tokenAccountsBody = '{"result":{"value":[]}}';
-      assetsBody = '{"result":{"items":[]}}';
+      multipleAccountsBody = '{"result":{"value":[]}}';
       priceStatus = 200;
       priceBody = '{"data":{}}';
       server = await HttpServer.bind('127.0.0.1', 0);
@@ -533,8 +565,8 @@ void main() {
           response = pid == SolScanService.token2022Program
               ? '{"result":{"value":[]}}'
               : tokenAccountsBody;
-        } else if (method == 'getAssetsByOwner') {
-          response = assetsBody;
+        } else if (method == 'getMultipleAccounts') {
+          response = multipleAccountsBody;
         } else {
           response = '{"result":null}';
         }
@@ -583,16 +615,25 @@ void main() {
       expect(out.first.pubkey, 'acc1');
     });
 
-    test('getAssets: unexpected shapes -> []', () async {
-      assetsBody = '{"result":{"items":"nope"}}';
+    test('getAssets: no token accounts -> []', () async {
+      tokenAccountsBody = '{"result":{"value":[]}}';
       expect(await SolScanService.instance.getAssets('g1'), isEmpty);
-      assetsBody = '{"result":{"items":["notamap"]}}';
+    });
+
+    test('getAssets: unexpected shapes are skipped, not fatal', () async {
+      tokenAccountsBody = '{"result":{"value":"nope"}}';
       expect(await SolScanService.instance.getAssets('g2'), isEmpty);
-      assetsBody = '{"result":{"items":[{"id":"m1","token_info":{"balance":"123","decimals":6}}]}}';
-      final assets = await SolScanService.instance.getAssets('g3');
-      expect(assets, hasLength(1));
-      expect(assets.first.id, 'm1');
-      expect(assets.first.uiAmount, '0.000123');
+      tokenAccountsBody = '{"result":{"value":[{"pubkey":1}]}}';
+      expect(await SolScanService.instance.getAssets('g3'), isEmpty);
+    });
+
+    test('getMultipleAccountsBytes: nulls for missing accounts', () async {
+      multipleAccountsBody = '{"result":{"value":[null,null]}}';
+      final out = await SolScanService.instance.getMultipleAccountsBytes(
+        ['a', 'b'],
+      );
+      expect(out, hasLength(2));
+      expect(out, everyElement(isNull));
     });
 
     test('getBalanceLamports: clear error, not a TypeError', () async {
@@ -655,12 +696,17 @@ void main() {
     });
 
     test('assets cached within 30s', () async {
-      assetsBody =
-          '{"result":{"items":[{"id":"c1","token_info":{"balance":"5"}}]}}';
+      tokenAccountsBody = '{"result":{"value":[]}}';
+      final before = totalRequests;
       final a1 = await SolScanService.instance.getAssets('cache1');
+      final firstCallRequests = totalRequests - before;
       final a2 = await SolScanService.instance.getAssets('cache1');
       expect(a1, a2);
-      expect(a1.first.id, 'c1');
+      expect(
+        totalRequests - before,
+        firstCallRequests,
+        reason: 'the second call must be served from cache',
+      );
     });
 
     test('User-Agent header sent on every call', () async {
@@ -677,6 +723,39 @@ void main() {
         SolScanService.programName(SolScanService.tokenProgram),
         'SPL Token',
       );
+    });
+  });
+
+  group('TxInfo', () {
+    test('fromMap decodes both blockTime and block_time', () {
+      final m1 = {
+        'signature': 'sig1',
+        'slot': 100,
+        'err': null,
+        'blockTime': 123456789,
+        'memo': 'hello',
+      };
+      final m2 = {
+        'signature': 'sig2',
+        'slot': 101,
+        'err': 'error',
+        'block_time': 987654321,
+        'memo': null,
+      };
+
+      final t1 = TxInfo.fromMap(m1);
+      final t2 = TxInfo.fromMap(m2);
+
+      expect(t1.signature, 'sig1');
+      expect(t1.slot, 100);
+      expect(t1.blockTime, 123456789);
+      expect(t1.memo, 'hello');
+
+      expect(t2.signature, 'sig2');
+      expect(t2.slot, 101);
+      expect(t2.err, 'error');
+      expect(t2.blockTime, 987654321);
+      expect(t2.memo, isNull);
     });
   });
 }
