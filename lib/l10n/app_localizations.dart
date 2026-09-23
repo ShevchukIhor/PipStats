@@ -143,7 +143,7 @@ abstract class AppLocalizations {
   /// No description provided for @batteryCapacity.
   ///
   /// In en, this message translates to:
-  /// **'BATTERY CAPACITY'**
+  /// **'CAPACITY'**
   String get batteryCapacity;
 
   /// No description provided for @screenTime.
@@ -782,6 +782,42 @@ abstract class AppLocalizations {
   /// **'INVALID AMOUNT'**
   String get tipInvalidAmount;
 
+  /// No description provided for @tipCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'TRANSACTION CANCELLED'**
+  String get tipCancelled;
+
+  /// No description provided for @tipNoSkrAccount.
+  ///
+  /// In en, this message translates to:
+  /// **'NO SKR ACCOUNT FOUND FOR THIS WALLET.'**
+  String get tipNoSkrAccount;
+
+  /// No description provided for @tipAuthRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'MWA AUTHORIZATION REQUIRED'**
+  String get tipAuthRequired;
+
+  /// No description provided for @tipIdentityMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'WALLET IDENTITY MISMATCH'**
+  String get tipIdentityMismatch;
+
+  /// No description provided for @tipInsufficientSol.
+  ///
+  /// In en, this message translates to:
+  /// **'INSUFFICIENT SOL BALANCE'**
+  String get tipInsufficientSol;
+
+  /// No description provided for @tipInsufficientSkr.
+  ///
+  /// In en, this message translates to:
+  /// **'INSUFFICIENT SKR BALANCE'**
+  String get tipInsufficientSkr;
+
   /// No description provided for @aboutTitle.
   ///
   /// In en, this message translates to:
@@ -793,6 +829,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'WEBSITE'**
   String get website;
+
+  /// No description provided for @delegationAlertTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'! ACTIVE TOKEN APPROVALS'**
+  String get delegationAlertTitle;
+
+  /// No description provided for @delegationAlertBody.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can spend those tokens without asking again. Revoke any you do not recognise.'**
+  String delegationAlertBody(num count);
+
+  /// No description provided for @monitoringTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'MONITORING INTERRUPTED'**
+  String get monitoringTitle;
+
+  /// No description provided for @monitoringStopped.
+  ///
+  /// In en, this message translates to:
+  /// **'Background collection is not running — usage and battery history will have gaps.'**
+  String get monitoringStopped;
+
+  /// No description provided for @monitoringRestart.
+  ///
+  /// In en, this message translates to:
+  /// **'RESTART'**
+  String get monitoringRestart;
+
+  /// No description provided for @monitoringBatteryOpt.
+  ///
+  /// In en, this message translates to:
+  /// **'Android power management may kill background collection on this device.'**
+  String get monitoringBatteryOpt;
+
+  /// No description provided for @monitoringAllow.
+  ///
+  /// In en, this message translates to:
+  /// **'ALLOW'**
+  String get monitoringAllow;
+
+  /// No description provided for @monitoringNoNotif.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications are blocked, so the monitoring notification cannot be shown.'**
+  String get monitoringNoNotif;
+
+  /// No description provided for @monitoringEnableNotif.
+  ///
+  /// In en, this message translates to:
+  /// **'ENABLE'**
+  String get monitoringEnableNotif;
 }
 
 class _AppLocalizationsDelegate

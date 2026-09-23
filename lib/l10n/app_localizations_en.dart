@@ -31,7 +31,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get uptime => 'UPTIME';
 
   @override
-  String get batteryCapacity => 'BATTERY CAPACITY';
+  String get batteryCapacity => 'CAPACITY';
 
   @override
   String get screenTime => 'SCREEN TIME';
@@ -416,8 +416,69 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tipInvalidAmount => 'INVALID AMOUNT';
 
   @override
+  String get tipCancelled => 'TRANSACTION CANCELLED';
+
+  @override
+  String get tipNoSkrAccount => 'NO SKR ACCOUNT FOUND FOR THIS WALLET.';
+
+  @override
+  String get tipAuthRequired => 'MWA AUTHORIZATION REQUIRED';
+
+  @override
+  String get tipIdentityMismatch => 'WALLET IDENTITY MISMATCH';
+
+  @override
+  String get tipInsufficientSol => 'INSUFFICIENT SOL BALANCE';
+
+  @override
+  String get tipInsufficientSkr => 'INSUFFICIENT SKR BALANCE';
+
+  @override
   String get aboutTitle => 'ABOUT DEVICE STATS';
 
   @override
   String get website => 'WEBSITE';
+
+  @override
+  String get delegationAlertTitle => '! ACTIVE TOKEN APPROVALS';
+
+  @override
+  String delegationAlertBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString token accounts have active delegates',
+      one: '1 token account has an active delegate',
+    );
+    return '$_temp0 that can spend those tokens without asking again. Revoke any you do not recognise.';
+  }
+
+  @override
+  String get monitoringTitle => 'MONITORING INTERRUPTED';
+
+  @override
+  String get monitoringStopped =>
+      'Background collection is not running — usage and battery history will have gaps.';
+
+  @override
+  String get monitoringRestart => 'RESTART';
+
+  @override
+  String get monitoringBatteryOpt =>
+      'Android power management may kill background collection on this device.';
+
+  @override
+  String get monitoringAllow => 'ALLOW';
+
+  @override
+  String get monitoringNoNotif =>
+      'Notifications are blocked, so the monitoring notification cannot be shown.';
+
+  @override
+  String get monitoringEnableNotif => 'ENABLE';
 }
