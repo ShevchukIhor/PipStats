@@ -9,7 +9,7 @@
 
   "charge": "ЗАРЯД",
   "uptime": "АПТАЙМ",
-  "batteryCapacity": "ЄМНІСТЬ БАТАРЕЇ",
+  "batteryCapacity": "ЄМНІСТЬ",
   "screenTime": "ЕКРАННИЙ ЧАС",
   "refreshIn": "ОНОВЛЕННЯ {seconds}с",
   "deviceInfoLoadFailed": "НЕ ВДАЛОСЯ ЗАВАНТАЖИТИ ІНФОРМАЦІЮ ПРО ПРИСТРІЙ",
@@ -129,6 +129,24 @@
   "tipError": "ПОМИЛКА ТІПУ: {error}",
   "tipNoWallet": "СПОЧАТКУ ПІДКЛЮЧІТЬ ГАМАНЕЦЬ",
   "tipInvalidAmount": "НЕВІРНА СУМА",
+  "tipCancelled": "ТРАНЗАКЦІЮ СКАСОВАНО",
+  "tipNoSkrAccount": "НЕ ЗНАЙДЕНО АКАУНТУ SKR ДЛЯ ЦЬОГО ГАМАНЦЯ.",
+  "tipAuthRequired": "ПОТРІБНА АВТОРИЗАЦІЯ MWA",
+  "tipIdentityMismatch": "НЕВІДПОВІДНІСТЬ ІДЕНТИФІКАЦІЇ ГАМАНЦЯ",
+  "tipInsufficientSol": "НЕДОСТАТНЬО SOL",
+  "tipInsufficientSkr": "НЕДОСТАТНЬО SKR",
   "aboutTitle": "ПРО DEVICE STATS",
-  "website": "ВЕБСАЙТ"
+  "website": "ВЕБСАЙТ",
+  "delegationAlertTitle": "! АКТИВНІ ДОЗВОЛИ НА ТОКЕНИ",
+  "delegationAlertBody": "{count, plural, =1{1 токен-акаунт має активного делегата} few{{count} токен-акаунти мають активних делегатів} other{{count} токен-акаунтів мають активних делегатів}}, який може витрачати ці токени без повторного запиту. Відкличте ті, яких не впізнаєте.",
+  "@delegationAlertBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  },
+  "monitoringTitle": "МОНІТОРИНГ ПЕРЕРВАНО",
+  "monitoringStopped": "Фоновий збір не працює — в історії використання та батареї будуть прогалини.",
+  "monitoringRestart": "ПЕРЕЗАПУСТИТИ",
+  "monitoringBatteryOpt": "Керування живленням Android може вбивати фоновий збір на цьому пристрої.",
+  "monitoringAllow": "ДОЗВОЛИТИ",
+  "monitoringNoNotif": "Сповіщення заблоковані, тож сповіщення моніторингу не показується.",
+  "monitoringEnableNotif": "УВІМКНУТИ"
 }

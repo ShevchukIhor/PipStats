@@ -54,6 +54,9 @@ class RevokeService {
   /// Build the unsigned revoke transaction bytes (pure, no I/O) for a token
   /// account delegating its spender back to nothing. The MWA layer signs and
   /// sends these bytes via Seed Vault.
+  ///
+  /// Returns transaction wire format (signature count + placeholder slots +
+  /// message), which is what MWA `signAndSendTransactions` accepts.
   static List<int> buildRevokeMessage({
     required String ownerAddress,
     required String tokenAccount,
@@ -74,10 +77,24 @@ class RevokeService {
       feePayer: owner,
     );
 
-    // MWA `signAndSendTransactions` expects the serialized MESSAGE (the wallet
-    // appends signatures itself). Do NOT prepend placeholder signatures — a full
-    // tx with zeroed sigs is mis-parsed and fails to sign.
-    return compiled.toByteArray().toList();
+    // MWA `signAndSendTransactions` expects a serialized TRANSACTION: a
+    // compact-u16 signature count, that many zeroed 64-byte signature slots,
+    // then the message. The wallet fills the signatures in.
+    //
+    // An earlier comment here claimed the opposite — that a bare message was
+    // required and placeholders broke signing. That was a wrong conclusion
+    // drawn from the "Invalid Transaction" failures which actually came from
+    // the adapter defaulting to the devnet chain (fixed in WalletConnect.kt).
+    // Sending a bare message makes the Seeker wallet reject it outright with
+    // "Invalid transaction - not properly formed" (observed on device).
+    final messageBytes = compiled.toByteArray().toList();
+    // legacy header: first byte is numRequiredSignatures
+    final signatureCount = messageBytes[0];
+    return <int>[
+      signatureCount,
+      ...List<int>.filled(signatureCount * 64, 0),
+      ...messageBytes,
+    ];
   }
 
   /// Build the unsigned revoke transaction message bytes and submit it to the

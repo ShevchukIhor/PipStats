@@ -58,6 +58,14 @@ class DeviceStatsColors extends ThemeExtension<DeviceStatsColors> {
   /// CRT scanline overlay stroke colour.
   final Color scanline;
 
+  /// Whether to render the CRT treatment (scanlines, vignette, glow).
+  ///
+  /// Only the default Pip-Boy palette gets it. `highContrast` exists for
+  /// legibility and `light` would look broken under scanlines, so both stay
+  /// clean — which also leaves a one-tap escape from the CRT via the palette
+  /// switcher when a dense table needs to be read.
+  bool get crt => this == DeviceStatsColors.pipboy;
+
   @override
   DeviceStatsColors copyWith({
     Color? primary,
@@ -160,6 +168,37 @@ class DeviceStatsColors extends ThemeExtension<DeviceStatsColors> {
     battery: Color(0xFFE65100),
     scanline: Color(0x0A000000),
   );
+}
+
+/// Font sizes for the whole UI, in one place.
+///
+/// VT323 is a bitmap-style terminal face with a small x-height: it renders
+/// noticeably smaller than its nominal size, so the previous 12-15px literals
+/// read like ~10px of a normal font. These are the sizes the UI actually uses;
+/// changing the scale is now a one-line edit rather than 81 scattered numbers.
+class PipText {
+  /// Row labels on the left of a key/value line.
+  static const double label = 17;
+
+  /// Body copy and secondary notes.
+  static const double body = 18;
+
+  /// The value on the right of a key/value line.
+  static const double value = 18;
+
+  /// Smaller supporting note under a value.
+  static const double note = 16;
+
+  /// `[ SECTION ]` headers.
+  static const double heading = 24;
+
+  /// Tab labels and the app bar.
+  static const double title = 22;
+
+  /// The single largest readout (battery percentage).
+  static const double hero = 32;
+
+  PipText._();
 }
 
 /// Short-hand accessor: `context.ds` returns the active [DeviceStatsColors].

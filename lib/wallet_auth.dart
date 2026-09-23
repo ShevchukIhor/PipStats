@@ -30,9 +30,14 @@ class WalletAuthService {
     return _fromMap(map);
   }
 
-  /// Restore a previously-persisted Seed Vault session (silent reconnect).
-  /// Returns null when no session was saved or the saved data is invalid.
-  Future<WalletAuth?> restore() async {
+  /// The last wallet address this app saw, read from local storage.
+  ///
+  /// This is **not** a session check: no MWA auth token is validated, so a
+  /// non-null result does not mean the wallet still authorises us. After the
+  /// user revokes access in their wallet this keeps returning the old address
+  /// until [deauthorize] is called. Named for what it does — the previous
+  /// name `restore()` implied a silent reconnect that never happened.
+  Future<WalletAuth?> lastKnownWallet() async {
     final map = await _channel.invokeMapMethod('restoreWallet');
     return _fromMap(map);
   }
@@ -82,5 +87,17 @@ class WalletAuthService {
     final s = addr.trim();
     if (!isValidAddress(s)) return null;
     return WalletAuth(address: s, accountLabel: null);
+  }
+
+  /// Sign and submit a compiled transaction message via the native MWA layer.
+  ///
+  /// [messageBytes] is a compiled (unsigned) Solana message — the same shape
+  /// the native `revokeDelegate` handler takes; the wallet appends signatures
+  /// itself. Returns the native result map (`{signature: <base64>}`), or null
+  /// when the user dismissed the wallet.
+  Future<Map<Object?, Object?>?> sendTip(List<int> messageBytes) async {
+    return await _channel.invokeMethod<Map<Object?, Object?>?>('sendTip', {
+      'message_bytes': messageBytes,
+    });
   }
 }

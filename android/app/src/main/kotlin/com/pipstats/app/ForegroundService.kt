@@ -11,16 +11,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.util.Log
 
 class ForegroundService : Service() {
 
     private val CHANNEL_ID = "device_stats_foreground"
     private val NOTIFICATION_ID = 1001
-    private var handler: Handler = Handler(Looper.getMainLooper())
+    /** Wall-clock start, used as the chronometer base. 0 until first start. */
     private var startTime: Long = 0
 
     override fun onCreate() {
@@ -55,13 +52,8 @@ class ForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val elapsed = SystemClock.elapsedRealtime() - startTime
-        val hours = elapsed / 3600000
-        val minutes = (elapsed % 3600000) / 60000
-        val seconds = (elapsed % 60000) / 1000
-
         val stopIntent = Intent(this, ForegroundService::class.java).apply {
-            action = "STOP_SERVICE"
+            action = ACTION_STOP
         }
         val stopPendingIntent = PendingIntent.getService(
             this,
@@ -71,9 +63,16 @@ class ForegroundService : Service() {
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Device Stats")
-            .setContentText("Monitoring battery & app usage · ${String.format("%02d:%02d:%02d", hours, minutes, seconds)}")
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setContentTitle("PipStats")
+            .setContentText("Monitoring battery & app usage")
+            // The elapsed time is drawn by the system from this base, so the
+            // notification no longer has to be rebuilt once a second just to
+            // tick a counter — that was 86,400 CPU wake-ups a day inside an
+            // app whose whole purpose is measuring battery drain.
+            .setUsesChronometer(true)
+            .setWhen(startTime)
+            .setShowWhen(true)
+            .setSmallIcon(R.drawable.ic_stat_monitor)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -90,10 +89,22 @@ class ForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startTime = SystemClock.elapsedRealtime()
+        // The stop action and ForegroundService.stop() both send this, but the
+        // action was never read: every stop request restarted the service
+        // instead, so the notification's "Stop" button could not stop anything.
+        if (intent?.action == ACTION_STOP) {
+            isRunning = false
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
-        // Start timer to update notification every second
-        handler.postDelayed(updateNotificationRunnable, 1000)
+        // Keep the original start time across re-deliveries (START_STICKY
+        // restarts, boot, repeated start calls) so the chronometer shows how
+        // long monitoring has really been up, not time since the last restart.
+        if (startTime == 0L) {
+            startTime = System.currentTimeMillis()
+        }
 
         val notification = buildNotification()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -101,28 +112,27 @@ class ForegroundService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        isRunning = true
 
         return START_STICKY
     }
 
-    private val updateNotificationRunnable = object : Runnable {
-        override fun run() {
-            val notification = buildNotification()
-            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.notify(NOTIFICATION_ID, notification)
-            handler.postDelayed(this, 1000)
-        }
-    }
-
     override fun onDestroy() {
-        handler.removeCallbacks(updateNotificationRunnable)
-        stopForeground(true)
+        isRunning = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
+        const val ACTION_STOP = "com.pipstats.app.STOP_SERVICE"
+
+        /** Set while the service is live, so the UI can show its real state. */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
         fun start(context: Context) {
             val intent = Intent(context, ForegroundService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -134,7 +144,7 @@ class ForegroundService : Service() {
 
         fun stop(context: Context) {
             val intent = Intent(context, ForegroundService::class.java).apply {
-                action = "STOP_SERVICE"
+                action = ACTION_STOP
             }
             context.startService(intent)
         }

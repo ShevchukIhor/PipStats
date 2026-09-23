@@ -3,7 +3,7 @@
 /// The Helius API key is supplied at build time via
 /// `--dart-define=HELIUS_API_KEY=<key>` (or `--dart-define-from-file=defines.env`)
 /// and is never hardcoded in source. Without a key we fall back to a free
-/// public mainnet RPC (rate-limited, and **no DAS** — see [hasHeliusKey]).
+/// public mainnet RPC — every feature still works, only rate limits differ.
 class MissingRpcKey implements Exception {
   @override
   String toString() =>
@@ -21,14 +21,16 @@ const String _heliusBase = 'https://mainnet.helius-rpc.com/?api-key=';
 String? rpcOverride;
 
 /// True when a Helius key was supplied at build time (compile-time define).
-/// Helius is required for DAS (`getAssetsByOwner`) — token/NFT metadata.
+///
+/// Purely an RPC-endpoint preference now: token and NFT metadata are read
+/// from Metaplex accounts on-chain, so no provider-specific API is required
+/// and the app is fully functional on the free public RPC.
+///
+/// Note that a compile-time key is embedded in the APK in clear text and can
+/// be extracted from any installed build — route it through a server-side
+/// proxy if it must stay private.
 bool get hasHeliusKey =>
     const String.fromEnvironment('HELIUS_API_KEY').isNotEmpty;
-
-/// True when Digital Asset Standard (DAS) lookups are available, i.e. running
-/// against Helius (or an override/testing endpoint). On the public fallback
-/// RPC, `getAssetsByOwner` is unsupported.
-bool get dasAvailable => rpcOverride != null || hasHeliusKey;
 
 /// Builds the RPC endpoint.
 ///

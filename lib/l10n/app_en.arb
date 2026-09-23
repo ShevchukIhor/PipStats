@@ -9,7 +9,7 @@
 
   "charge": "CHARGE",
   "uptime": "UPTIME",
-  "batteryCapacity": "BATTERY CAPACITY",
+  "batteryCapacity": "CAPACITY",
   "screenTime": "SCREEN TIME",
   "refreshIn": "NEXT REFRESH {seconds}s",
   "@refreshIn": { "placeholders": { "seconds": {} } },
@@ -155,6 +155,24 @@
   "tipError": "TIP FAILED: {error}",
   "tipNoWallet": "CONNECT WALLET FIRST",
   "tipInvalidAmount": "INVALID AMOUNT",
+  "tipCancelled": "TRANSACTION CANCELLED",
+  "tipNoSkrAccount": "NO SKR ACCOUNT FOUND FOR THIS WALLET.",
+  "tipAuthRequired": "MWA AUTHORIZATION REQUIRED",
+  "tipIdentityMismatch": "WALLET IDENTITY MISMATCH",
+  "tipInsufficientSol": "INSUFFICIENT SOL BALANCE",
+  "tipInsufficientSkr": "INSUFFICIENT SKR BALANCE",
   "aboutTitle": "ABOUT DEVICE STATS",
-  "website": "WEBSITE"
+  "website": "WEBSITE",
+  "delegationAlertTitle": "! ACTIVE TOKEN APPROVALS",
+  "delegationAlertBody": "{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can spend those tokens without asking again. Revoke any you do not recognise.",
+  "@delegationAlertBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  },
+  "monitoringTitle": "MONITORING INTERRUPTED",
+  "monitoringStopped": "Background collection is not running — usage and battery history will have gaps.",
+  "monitoringRestart": "RESTART",
+  "monitoringBatteryOpt": "Android power management may kill background collection on this device.",
+  "monitoringAllow": "ALLOW",
+  "monitoringNoNotif": "Notifications are blocked, so the monitoring notification cannot be shown.",
+  "monitoringEnableNotif": "ENABLE"
 }

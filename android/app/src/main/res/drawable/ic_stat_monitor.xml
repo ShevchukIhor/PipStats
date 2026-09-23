@@ -1,0 +1,23 @@
+<!--
+  Notification small icon.
+
+  Android renders the small icon as a silhouette from its alpha channel, so it
+  must be a single flat white shape on transparency — colour and detail are
+  discarded. Replaces android.R.drawable.stat_sys_warning, whose warning
+  triangle made routine monitoring look like an app error.
+
+  Shape: a pulse/monitor line inside a rounded frame.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,3h16c1.1,0 2,0.9 2,2v11c0,1.1 -0.9,2 -2,2h-5.5l0.6,2H17v2H7v-2h1.9l0.6,-2H4c-1.1,0 -2,-0.9 -2,-2V5c0,-1.1 0.9,-2 2,-2zM4,5v11h16V5H4z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5.5,11.2h2.6l1.3,-3.4l2.2,5.6l1.5,-3.1l1,0.9h3.4v1.6h-4.1l-0.5,-0.4l-1.6,3.2l-2.2,-5.6l-0.9,2.4H5.5z" />
+</vector>

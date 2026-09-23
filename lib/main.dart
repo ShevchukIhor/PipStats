@@ -1,15 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:developer';
-import 'dart:math' show pow;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:battery_plus/battery_plus.dart';
-import 'package:http/http.dart' as http;
-import 'package:solana/solana.dart';
-
 import 'stats_db.dart';
 import 'stats_service.dart';
 import 'solscan_service.dart';
@@ -17,12 +13,10 @@ import 'domains.dart';
 import 'wallet_auth.dart';
 import 'revoke.dart';
 import 'theme.dart';
-import 'rpc_config.dart';
-import 'base58.dart';
+import 'widgets/boot_sequence.dart';
+import 'widgets/crt_overlay.dart';
 import 'l10n/app_localizations.dart';
-
-const String _skrMint = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
-const int _skrDecimals = 6;
+import 'package:pipstats/widgets/tip_widget.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -83,6 +77,10 @@ class DeviceStatsApp extends StatefulWidget {
 class _DeviceStatsAppState extends State<DeviceStatsApp> {
   late DeviceStatsTheme _theme = widget.initialTheme;
 
+  /// False until the boot sequence finishes (or is tapped through). Held here
+  /// rather than in HomePage so it runs once per cold start, not on rebuild.
+  bool _booted = false;
+
   DeviceStatsColors get _colors => switch (_theme) {
     DeviceStatsTheme.pipboy => DeviceStatsColors.pipboy,
     DeviceStatsTheme.highContrast => DeviceStatsColors.highContrast,
@@ -113,7 +111,13 @@ class _DeviceStatsAppState extends State<DeviceStatsApp> {
       home: DeviceStatsScope(
         theme: _theme,
         onThemeChanged: (_) => _cycleTheme(),
-        child: const HomePage(),
+        // The CRT layer wraps the whole app so scanlines and the vignette
+        // cover dialogs and sheets too, not just the page body.
+        child: CrtOverlay(
+          child: _booted
+              ? const HomePage()
+              : BootSequence(onDone: () => setState(() => _booted = true)),
+        ),
       ),
     );
   }
@@ -152,13 +156,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   static const MethodChannel _channel = MethodChannel('device_stats/usage');
 
   Period _period = Period.day;
+  /// Monitoring health. Null until first checked, so the banner stays hidden
+  /// rather than flashing a false alarm on the first frame.
+  bool? _serviceRunning;
+  bool? _batteryOptIgnored;
+  bool? _notificationsEnabled;
+
   int _batteryLevel = -1;
   bool _charging = false;
   int _capacityUah = -1;
   int _realCapacityUah = -1;
   int _designCapacityUah = -1;
   int _calibratedCapacityUah = -1;
-  int _currentChargeUah = -1;
   final List<int> _capacityEstimates = [];
   bool _batteryInfoAvailable = false;
   String _uptime = '';
@@ -205,6 +214,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _loadPrefs().then((_) => _refresh());
     _deviceInfoFuture = StatsService.getDeviceInfo();
     StatsService.scheduleSync();
+    _refreshMonitoringHealth();
     _pollTimer = Timer.periodic(Duration(seconds: 1), (_) => _pollTick());
   }
 
@@ -226,6 +236,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _checkAccess();
       _syncAndRefresh();
+      // Both can change while we are away: the service may be killed by the
+      // system, and the exemption is granted in a separate activity.
+      _refreshMonitoringHealth();
     }
   }
 
@@ -425,19 +438,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _prevChargeCounterUah = counter;
       }
 
-      final effCap = _effectiveCapacityUah;
-      if (_batteryLevel >= 0 && effCap > 0) {
-        _currentChargeUah = (effCap * _batteryLevel / 100).round();
-      } else if (counter is int) {
-        _currentChargeUah = counter;
-      }
-
       _batteryInfoAvailable = true;
     } catch (e) {
       log('_sampleBattery error: $e');
     }
   }
 
+  /// Capacity to base the readout on, in µAh.
+  ///
+  /// Design capacity (from `power_profile.xml`) outranks anything derived from
+  /// the fuel gauge. On this MediaTek device the gauge reports `charge_full` =
+  /// 2946 mAh against a declared 4500 mAh — but `cycle_count` is 1, Android's
+  /// min/last/max "learned" figures are all identical, and measured discharge
+  /// is 0 mAh. A one-cycle cell has not lost 35%: that number is an
+  /// uncalibrated gauge reading, not wear, so preferring it (as an earlier
+  /// version of this getter did) showed a plainly wrong capacity.
+  ///
+  /// A user calibration still wins over both — that is a real measurement.
   int get _effectiveCapacityUah {
     if (_calibratedCapacityUah > 0) return _calibratedCapacityUah;
     if (_designCapacityUah > 0) return _designCapacityUah;
@@ -652,6 +669,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 _header(),
                 _tabSwitch(),
                 if (_tab == 0) ...[
+                  _monitoringBanner(),
                   _metricsRow(),
                   _screenTimeBar(),
                   SizedBox(height: 12),
@@ -673,7 +691,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         l10n.shortHistory,
                         style: TextStyle(
                           color: ds.dim,
-                          fontSize: 15,
+                          fontSize: PipText.body,
                           letterSpacing: 1,
                         ),
                       ),
@@ -729,7 +747,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 maxLines: 1,
                 style: TextStyle(
                   color: ds.primary,
-                  fontSize: 26,
+                  fontSize: PipText.hero,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 2,
                 ),
@@ -801,7 +819,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             label,
             style: TextStyle(
               color: active ? ds.bg : ds.primary,
-              fontSize: 16,
+              fontSize: PipText.note,
               letterSpacing: 2,
               fontWeight: FontWeight.bold,
             ),
@@ -832,7 +850,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 l10n.seedVault,
                 style: TextStyle(
                   color: ds.primary,
-                  fontSize: 20,
+                  fontSize: PipText.heading,
                   letterSpacing: 2,
                 ),
               ),
@@ -840,7 +858,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               if (_walletAddress == null) ...[
                 Text(
                   l10n.connectSeedVault,
-                  style: TextStyle(color: ds.dim, fontSize: 14),
+                  style: TextStyle(color: ds.dim, fontSize: PipText.body),
                 ),
                 SizedBox(height: 10),
                 _vaultActionButton(
@@ -851,10 +869,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 SizedBox(height: 8),
                 TextField(
                   controller: _addressController,
-                  style: TextStyle(color: ds.primary, fontSize: 15),
+                  style: TextStyle(color: ds.primary, fontSize: PipText.body),
                   decoration: InputDecoration(
                     hintText: l10n.addressHint,
-                    hintStyle: TextStyle(color: ds.dark, fontSize: 14),
+                    hintStyle: TextStyle(color: ds.dark, fontSize: PipText.body),
                     enabledBorder: OutlineInputBorder(
                       borderSide: BorderSide(color: ds.dark, width: 1),
                     ),
@@ -870,12 +888,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   l10n.addrLabel(_walletAddress!),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: ds.primary, fontSize: 14),
+                  style: TextStyle(color: ds.primary, fontSize: PipText.body),
                 ),
                 if (_walletLabel != null)
                   Text(
                     l10n.walletLabel(_walletLabel!),
-                    style: TextStyle(color: ds.dim, fontSize: 13),
+                    style: TextStyle(color: ds.dim, fontSize: PipText.label),
                   ),
                 SizedBox(height: 8),
                 Text(
@@ -884,22 +902,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         ? '...'
                         : '${(_solLamports / 1e9).toStringAsFixed(4)} SOL',
                   ),
-                  style: TextStyle(color: ds.primary, fontSize: 18),
+                  style: TextStyle(color: ds.primary, fontSize: PipText.value),
                 ),
                 if (_totalUsd > 0)
                   Text(
                     l10n.estValue(_totalUsd.toStringAsFixed(2)),
-                    style: TextStyle(color: ds.dim, fontSize: 15),
+                    style: TextStyle(color: ds.dim, fontSize: PipText.body),
                   ),
                 if (_pricesUnavailable)
                   Text(
                     l10n.pricesUnavailable,
-                    style: TextStyle(color: ds.dim, fontSize: 13),
-                  ),
-                if (!dasAvailable)
-                  Text(
-                    l10n.metadataUnavailable,
-                    style: TextStyle(color: ds.dim, fontSize: 13),
+                    style: TextStyle(color: ds.dim, fontSize: PipText.label),
                   ),
                 SizedBox(height: 10),
                 Row(
@@ -927,7 +940,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                     _vaultError,
-                    style: TextStyle(color: ds.dangerBorder, fontSize: 13),
+                    style: TextStyle(color: ds.dangerBorder, fontSize: PipText.label),
                   ),
                 ),
               if (_vaultSuccess.isNotEmpty)
@@ -935,7 +948,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   padding: EdgeInsets.only(top: 8),
                   child: Text(
                     _vaultSuccess,
-                    style: TextStyle(color: ds.primary, fontSize: 13),
+                    style: TextStyle(color: ds.primary, fontSize: PipText.label),
                   ),
                 ),
             ],
@@ -986,7 +999,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             label,
             style: TextStyle(
               color: active ? ds.bg : ds.primary,
-              fontSize: 15,
+              fontSize: PipText.body,
               letterSpacing: 1,
               fontWeight: FontWeight.bold,
             ),
@@ -1007,7 +1020,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.tokens,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
@@ -1022,7 +1035,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.nfts,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
@@ -1037,7 +1050,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.transactions,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
@@ -1052,7 +1065,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.delegations,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
@@ -1060,25 +1073,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (_walletAddress == null)
               Text(
                 l10n.connectWalletToScan,
-                style: TextStyle(color: ds.dim, fontSize: 14),
+                style: TextStyle(color: ds.dim, fontSize: PipText.body),
               )
             else if (_tokenAccounts.isEmpty && _vaultBusy)
-              Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: 14))
+              Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: PipText.body))
             else if (_tokenAccounts.isEmpty)
               Text(
                 l10n.noActiveDelegations,
-                style: TextStyle(color: ds.dim, fontSize: 14),
+                style: TextStyle(color: ds.dim, fontSize: PipText.body),
               )
-            else
-              ..._tokenAccounts
-                  .where((t) => t.hasDelegate)
-                  .map((t) => _delegationRow(t)),
+            else ...[
+              // A wallet can hold token accounts and still have no approvals;
+              // the previous `else` branch rendered an empty list in that case
+              // and the "none" message never appeared.
+              if (_delegatedAccounts.isEmpty)
+                Text(
+                  l10n.noActiveDelegations,
+                  style: TextStyle(color: ds.dim, fontSize: PipText.body),
+                )
+              else ...[
+                _delegationAlert(ds, l10n, _delegatedAccounts.length),
+                SizedBox(height: 8),
+                ..._delegatedAccounts.map((t) => _delegationRow(t)),
+              ],
+            ],
             SizedBox(height: 14),
             Text(
               l10n.closeAuthority,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
@@ -1102,7 +1126,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .toList();
     if (tokens.isEmpty && !_vaultBusy) {
       return [
-        Text(l10n.noTokens, style: TextStyle(color: ds.dim, fontSize: 14)),
+        Text(l10n.noTokens, style: TextStyle(color: ds.dim, fontSize: PipText.body)),
       ];
     }
     return tokens.map((a) {
@@ -1122,10 +1146,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               child: Text(
                 sym,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: ds.primary, fontSize: 14),
+                style: TextStyle(color: ds.primary, fontSize: PipText.body),
               ),
             ),
-            Text(a.uiAmount, style: TextStyle(color: ds.primary, fontSize: 14)),
+            Text(a.uiAmount, style: TextStyle(color: ds.primary, fontSize: PipText.body)),
           ],
         ),
       );
@@ -1139,7 +1163,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final nfts = _assets.where((a) => !a.isFungible && !a.burnt).toList();
     final spamCount = _assets.where((a) => !a.isFungible && a.burnt).length;
     if (nfts.isEmpty && !_vaultBusy) {
-      return [Text(l10n.noNfts, style: TextStyle(color: ds.dim, fontSize: 14))];
+      return [Text(l10n.noNfts, style: TextStyle(color: ds.dim, fontSize: PipText.body))];
     }
     // Cap display to avoid a huge list; show count + first several names.
     final count = nfts.length;
@@ -1152,7 +1176,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       widgets.add(
         Padding(
           padding: EdgeInsets.only(bottom: 2),
-          child: Text('• $name', style: TextStyle(color: ds.dim, fontSize: 13)),
+          child: Text('• $name', style: TextStyle(color: ds.dim, fontSize: PipText.label)),
         ),
       );
     }
@@ -1160,7 +1184,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       widgets.add(
         Text(
           l10n.moreCount(count - shown.length),
-          style: TextStyle(color: ds.dark, fontSize: 13),
+          style: TextStyle(color: ds.dark, fontSize: PipText.label),
         ),
       );
     }
@@ -1170,7 +1194,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           l10n.spamHidden(spamCount),
           style: TextStyle(
             color: ds.dangerText,
-            fontSize: 12,
+            fontSize: PipText.note,
             letterSpacing: 1,
           ),
         ),
@@ -1190,7 +1214,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return [
         Text(
           l10n.noCloseAuthorityRisks,
-          style: TextStyle(color: ds.dim, fontSize: 14),
+          style: TextStyle(color: ds.dim, fontSize: PipText.body),
         ),
       ];
     }
@@ -1209,7 +1233,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.accountLabel(t.pubkey),
               style: TextStyle(
                 color: ds.dangerText,
-                fontSize: 12,
+                fontSize: PipText.note,
                 letterSpacing: 1,
               ),
             ),
@@ -1218,14 +1242,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.closeAuthorityLabel(t.closeAuthority ?? ''),
               style: TextStyle(
                 color: ds.dangerTextStrong,
-                fontSize: 12,
+                fontSize: PipText.note,
                 letterSpacing: 1,
               ),
             ),
             SizedBox(height: 4),
             Text(
               l10n.closeAuthorityWarning,
-              style: TextStyle(color: ds.dim, fontSize: 13),
+              style: TextStyle(color: ds.dim, fontSize: PipText.label),
             ),
           ],
         ),
@@ -1241,7 +1265,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       return [
         Text(
           l10n.noTransactions,
-          style: TextStyle(color: ds.dim, fontSize: 14),
+          style: TextStyle(color: ds.dim, fontSize: PipText.body),
         ),
       ];
     }
@@ -1259,11 +1283,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final lines = <Widget>[
         Text(
           l10n.txStatusSig(status, sig),
-          style: TextStyle(color: color, fontSize: 13, letterSpacing: 1),
+          style: TextStyle(color: color, fontSize: PipText.label, letterSpacing: 1),
         ),
         Text(
           '        $timeStr',
-          style: TextStyle(color: ds.dim, fontSize: 12),
+          style: TextStyle(color: ds.dim, fontSize: PipText.note),
         ),
       ];
 
@@ -1273,7 +1297,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lines.add(
             Text(
               l10n.feeSol(detail.feeSol),
-              style: TextStyle(color: ds.dim, fontSize: 12),
+              style: TextStyle(color: ds.dim, fontSize: PipText.note),
             ),
           );
         }
@@ -1282,7 +1306,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lines.add(
             Text(
               l10n.protoLabel(detail.programLabels.join(', ')),
-              style: TextStyle(color: ds.dim, fontSize: 12),
+              style: TextStyle(color: ds.dim, fontSize: PipText.note),
             ),
           );
         }
@@ -1292,7 +1316,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lines.add(
             Text(
               l10n.solTransfer(dest, sol.solAmount),
-              style: TextStyle(color: ds.dim, fontSize: 12),
+              style: TextStyle(color: ds.dim, fontSize: PipText.note),
             ),
           );
         }
@@ -1302,7 +1326,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           lines.add(
             Text(
               l10n.tokenTransfer(dest, tr.amount),
-              style: TextStyle(color: ds.dim, fontSize: 12),
+              style: TextStyle(color: ds.dim, fontSize: PipText.note),
             ),
           );
         }
@@ -1334,6 +1358,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return l10n.timeDaysAgo(diff.inDays);
   }
 
+  /// Token accounts with an active delegate — the approvals a user should
+  /// review and revoke.
+  List<TokenAccountInfo> get _delegatedAccounts =>
+      _tokenAccounts.where((t) => t.hasDelegate).toList();
+
+  /// Prominent warning that approvals exist. Listing them further down is not
+  /// enough: an approval lets a third party move tokens without asking again,
+  /// so it has to be visible without scrolling.
+  Widget _delegationAlert(
+    DeviceStatsColors ds,
+    AppLocalizations l10n,
+    int count,
+  ) {
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.only(bottom: 4),
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      decoration: BoxDecoration(
+        color: ds.dangerBg,
+        border: Border.all(color: ds.dangerBorder, width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.delegationAlertTitle,
+            style: TextStyle(
+              color: ds.dangerTextStrong,
+              fontSize: PipText.note,
+              letterSpacing: 1,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            l10n.delegationAlertBody(count),
+            style: TextStyle(color: ds.dangerText, fontSize: PipText.body),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _delegationRow(TokenAccountInfo t) {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
@@ -1351,7 +1417,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             l10n.accountLabel(t.pubkey),
             style: TextStyle(
               color: ds.dangerText,
-              fontSize: 12,
+              fontSize: PipText.note,
               letterSpacing: 1,
             ),
           ),
@@ -1360,7 +1426,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             l10n.mintLabel(t.mint),
             style: TextStyle(
               color: ds.dangerText,
-              fontSize: 13,
+              fontSize: PipText.label,
               letterSpacing: 1,
             ),
           ),
@@ -1369,14 +1435,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             l10n.delegateLabel(t.delegate ?? ''),
             style: TextStyle(
               color: ds.dangerTextStrong,
-              fontSize: 12,
+              fontSize: PipText.note,
               letterSpacing: 1,
             ),
           ),
           SizedBox(height: 4),
           Text(
             l10n.approvedAmountLabel(t.delegatedAmount),
-            style: TextStyle(color: ds.primary, fontSize: 15),
+            style: TextStyle(color: ds.primary, fontSize: PipText.body),
           ),
           SizedBox(height: 8),
           _vaultActionButton('REVOKE', _revokeBusy, () => _revokeDelegation(t)),
@@ -1437,17 +1503,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         children: [
           Text(
             l10n.revokeSection,
-            style: TextStyle(color: ds.primary, fontSize: 20, letterSpacing: 2),
+            style: TextStyle(color: ds.primary, fontSize: PipText.heading, letterSpacing: 2),
           ),
           SizedBox(height: 6),
           Text(
             l10n.revokeClearsHint,
-            style: TextStyle(color: ds.dim, fontSize: 13, letterSpacing: 1),
+            style: TextStyle(color: ds.dim, fontSize: PipText.label, letterSpacing: 1),
           ),
           SizedBox(height: 4),
           Text(
             l10n.revokeDisclaimer,
-            style: TextStyle(color: ds.dim, fontSize: 13),
+            style: TextStyle(color: ds.dim, fontSize: PipText.label),
           ),
         ],
       ),
@@ -1471,12 +1537,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               l10n.privacy,
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 20,
+                fontSize: PipText.heading,
                 letterSpacing: 2,
               ),
             ),
             Spacer(),
-            Text(l10n.tapToView, style: TextStyle(color: ds.dim, fontSize: 14)),
+            Text(l10n.tapToView, style: TextStyle(color: ds.dim, fontSize: PipText.body)),
           ],
         ),
       ),
@@ -1492,12 +1558,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         backgroundColor: ds.bg,
         title: Text(
           l10n.privacyPolicy,
-          style: TextStyle(color: ds.primary, fontSize: 20),
+          style: TextStyle(color: ds.primary, fontSize: PipText.heading),
         ),
         content: SingleChildScrollView(
           child: Text(
             l10n.privacyBody,
-            style: TextStyle(color: ds.dim, fontSize: 15),
+            style: TextStyle(color: ds.dim, fontSize: PipText.body),
           ),
         ),
         actions: [
@@ -1526,7 +1592,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           busy ? l10n.pleaseWait : label,
           style: TextStyle(
             color: busy ? ds.primary : ds.bg,
-            fontSize: 15,
+            fontSize: PipText.body,
             letterSpacing: 1,
             fontWeight: FontWeight.bold,
           ),
@@ -1787,13 +1853,133 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _restoreWallet() async {
-    final auth = await WalletAuthService.instance.restore();
+    final auth = await WalletAuthService.instance.lastKnownWallet();
     if (auth != null && mounted) {
       setState(() {
         _walletAddress = auth.address;
         _walletLabel = auth.accountLabel;
       });
     }
+  }
+
+  // ---- Monitoring health ----
+
+  /// Shown only when background collection is degraded.
+  ///
+  /// Two distinct problems, in order of severity: the service is not running
+  /// at all, or it is running but the OEM power manager is free to kill it.
+  /// Nothing is drawn when both are fine — a permanent nag trains people to
+  /// ignore the one time it matters.
+  Widget _monitoringBanner() {
+    final l10n = AppLocalizations.of(context);
+    final ds = context.ds;
+
+    // Ordered by severity. Blocked notifications come first: the service can
+    // be running perfectly and the user would still have no sign of it.
+    final stopped = _serviceRunning == false;
+    final noNotif = !stopped && _notificationsEnabled == false;
+    final unprotected =
+        !stopped && !noNotif && _batteryOptIgnored == false;
+    if (!stopped && !noNotif && !unprotected) {
+      return const SizedBox.shrink();
+    }
+
+    final String message;
+    final String action;
+    final VoidCallback onPressed;
+    if (stopped) {
+      message = l10n.monitoringStopped;
+      action = l10n.monitoringRestart;
+      onPressed = _restartMonitoring;
+    } else if (noNotif) {
+      message = l10n.monitoringNoNotif;
+      action = l10n.monitoringEnableNotif;
+      onPressed = _requestNotifications;
+    } else {
+      message = l10n.monitoringBatteryOpt;
+      action = l10n.monitoringAllow;
+      onPressed = _requestBatteryExemption;
+    }
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        decoration: BoxDecoration(
+          color: ds.dangerBg,
+          border: Border.all(color: ds.dangerBorder, width: 1),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (stopped)
+              Text(
+                l10n.monitoringTitle,
+                style: TextStyle(
+                  color: ds.dangerTextStrong,
+                  fontSize: PipText.note,
+                  letterSpacing: 1,
+                ),
+              ),
+            SizedBox(height: stopped ? 4 : 0),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    message,
+                    style: TextStyle(
+                      color: ds.dangerText,
+                      fontSize: PipText.note,
+                    ),
+                  ),
+                ),
+                SizedBox(width: 8),
+                TextButton(
+                  onPressed: onPressed,
+                  child: Text(
+                    action,
+                    style: TextStyle(
+                      color: ds.dangerTextStrong,
+                      fontSize: PipText.note,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _refreshMonitoringHealth() async {
+    final running = await StatsService.isServiceRunning();
+    final ignored = await StatsService.isIgnoringBatteryOptimizations();
+    final notif = await StatsService.areNotificationsEnabled();
+    if (!mounted) return;
+    setState(() {
+      _serviceRunning = running;
+      _batteryOptIgnored = ignored;
+      _notificationsEnabled = notif;
+    });
+  }
+
+  Future<void> _restartMonitoring() async {
+    await StatsService.startForegroundService();
+    await StatsService.scheduleSync();
+    await _refreshMonitoringHealth();
+  }
+
+  Future<void> _requestNotifications() async {
+    await StatsService.requestNotificationPermission();
+    await _refreshMonitoringHealth();
+  }
+
+  Future<void> _requestBatteryExemption() async {
+    await StatsService.requestIgnoreBatteryOptimizations();
+    // The system dialog is a separate activity; re-check when we come back.
+    await _refreshMonitoringHealth();
   }
 
   // ---- Metrics row ----
@@ -1813,11 +1999,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _metricBlock(l10n.uptime, _uptime.isEmpty ? '...' : _uptime),
           if (_batteryInfoAvailable) ...[
             SizedBox(width: 12),
+            // Only the total: the charge cell to the left already shows the
+            // level, so "2946 / 2946 mAh" was both redundant and a second line.
             _metricBlock(
               l10n.batteryCapacity,
               _effectiveCapacityUah > 0
-                  ? '${(_currentChargeUah / 1000.0).round()} / ${(_effectiveCapacityUah / 1000.0).round()} mAh'
-                  : '${(_currentChargeUah / 1000.0).round()} mAh',
+                  ? '${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                  : '...',
               onLongPress: _effectiveCapacityUah > 0 ? _showCalibrationDialog : null,
             ),
           ],
@@ -1826,26 +2014,52 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// One cell of the metrics strip.
+  ///
+  /// The label and the value used to share [PipText.heading], which made both
+  /// wrap to two lines once the type scale went up — "BATTERY CAPACITY" and
+  /// "4500 / 4500 mAh" each took two rows and the strip ate a third of the
+  /// screen. The label is now small and the value is kept to a single line,
+  /// shrinking to fit rather than wrapping.
   Widget _metricBlock(String label, String value, {VoidCallback? onLongPress}) {
     final ds = context.ds;
     return Expanded(
       child: GestureDetector(
         onLongPress: onLongPress,
         child: Container(
-          padding: EdgeInsets.all(10),
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 7),
           decoration: BoxDecoration(
             color: ds.panel,
             border: Border.all(color: ds.dark, width: 1),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 label,
-                style: TextStyle(color: ds.dim, fontSize: 20, letterSpacing: 2),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: ds.dim,
+                  fontSize: PipText.note,
+                  letterSpacing: 1,
+                ),
               ),
-              SizedBox(height: 4),
-              Text(value, style: TextStyle(color: ds.primary, fontSize: 20)),
+              SizedBox(height: 2),
+              FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: ds.primary,
+                    fontSize: PipText.title,
+                    shadows: ds.crt ? pipGlow(ds.primary, blur: 5) : null,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -1870,21 +2084,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           children: [
             Text(
               l10n.screenTime,
-              style: TextStyle(color: ds.dim, fontSize: 14, letterSpacing: 2),
+              style: TextStyle(color: ds.dim, fontSize: PipText.body, letterSpacing: 2),
             ),
             Spacer(),
             Text(
               l10n.refreshIn(_refreshCountdown),
               style: TextStyle(
                 color: ds.primary,
-                fontSize: 15,
+                fontSize: PipText.body,
                 letterSpacing: 1,
               ),
             ),
             SizedBox(width: 14),
             Text(
               _totalFgMs > 0 ? _fmtDuration(_totalFgMs) : '0s',
-              style: TextStyle(color: ds.primary, fontSize: 22),
+              style: TextStyle(color: ds.primary, fontSize: PipText.title),
             ),
           ],
         ),
@@ -1927,7 +2141,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _periodLabel(p).toUpperCase(),
           style: TextStyle(
             color: active ? ds.bg : ds.primary,
-            fontSize: 17,
+            fontSize: PipText.value,
             fontWeight: FontWeight.bold,
             letterSpacing: 1,
           ),
@@ -1957,7 +2171,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           Text(
             l10n.grantAccessHint,
             textAlign: TextAlign.center,
-            style: TextStyle(color: ds.dim, fontSize: 20),
+            style: TextStyle(color: ds.dim, fontSize: PipText.heading),
           ),
           SizedBox(height: 10),
           _pipboyButton(l10n.grantAccess, _openUsageSettings),
@@ -1998,7 +2212,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         children: [
           Text(
             l10n.applicationsHeader,
-            style: TextStyle(color: ds.dim, fontSize: 20, letterSpacing: 1),
+            style: TextStyle(color: ds.dim, fontSize: PipText.heading, letterSpacing: 1),
           ),
           Spacer(),
           _sortLabel(l10n.sortTime, SortKey.time),
@@ -2033,7 +2247,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             label,
             style: TextStyle(
               color: isActive ? ds.primary : ds.dim,
-              fontSize: 17,
+              fontSize: PipText.value,
               fontWeight: isActive ? FontWeight.bold : FontWeight.normal,
               letterSpacing: 1,
             ),
@@ -2089,13 +2303,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         r['label'] as String,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: ds.primary, fontSize: 20),
+                        style: TextStyle(color: ds.primary, fontSize: PipText.heading),
                       ),
                     ),
                     SizedBox(width: 8),
                     Text(
                       '> ${_fmtDuration(r['fg_ms'] as int)}',
-                      style: TextStyle(color: ds.primary, fontSize: 17),
+                      style: TextStyle(color: ds.primary, fontSize: PipText.value),
                     ),
                   ],
                 ),
@@ -2104,7 +2318,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   pkg,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: ds.dim, fontSize: 13),
+                  style: TextStyle(color: ds.dim, fontSize: PipText.label),
                 ),
                 SizedBox(height: 3),
                 _usageBar(r['fg_ms'] as int),
@@ -2119,7 +2333,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           'CHARGING',
                           style: TextStyle(
                             color: ds.battery,
-                            fontSize: 14,
+                            fontSize: PipText.body,
                             letterSpacing: 1,
                             fontWeight: FontWeight.bold,
                           ),
@@ -2141,7 +2355,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             ),
                             style: TextStyle(
                               color: ds.battery,
-                              fontSize: 14,
+                              fontSize: PipText.body,
                               letterSpacing: 1,
                             ),
                           ),
@@ -2156,7 +2370,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               padding: EdgeInsets.only(left: 8),
               child: Text(
                 '${r['launches']}x',
-                style: TextStyle(color: ds.dim, fontSize: 15),
+                style: TextStyle(color: ds.dim, fontSize: PipText.body),
               ),
             ),
             onTap: () => _showAppMenu(pkg),
@@ -2232,7 +2446,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 children: [
                   CircularProgressIndicator(color: ds.primary),
                   SizedBox(height: 16),
-                  Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: 14)),
+                  Text(l10n.scanning, style: TextStyle(color: ds.dim, fontSize: PipText.body)),
                 ],
               ),
             );
@@ -2241,7 +2455,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             return Center(
               child: Text(
                 l10n.deviceInfoLoadFailed,
-                style: TextStyle(color: ds.dangerBorder, fontSize: 16, letterSpacing: 2),
+                style: TextStyle(color: ds.dangerBorder, fontSize: PipText.note, letterSpacing: 2),
               ),
             );
           }
@@ -2323,9 +2537,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: ds.bg,
-        title: Text(l10n.termsOfService, style: TextStyle(color: ds.primary, fontSize: 20)),
+        title: Text(l10n.termsOfService, style: TextStyle(color: ds.primary, fontSize: PipText.heading)),
         content: SingleChildScrollView(
-          child: Text(l10n.termsBody, style: TextStyle(color: ds.dim, fontSize: 15)),
+          child: Text(l10n.termsBody, style: TextStyle(color: ds.dim, fontSize: PipText.body)),
         ),
         actions: [
           TextButton(
@@ -2338,193 +2552,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _showTipModal() async {
-    final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-
     if (_walletAddress == null) {
       _showSnack(l10n.tipNoWallet);
       return;
     }
 
-    final controller = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: ds.bg,
-        title: Text(l10n.tipTitle, style: TextStyle(color: ds.primary, fontSize: 20)),
-        content: Form(
-          key: formKey,
-          child: TextFormField(
-            controller: controller,
-            keyboardType: TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              hintText: l10n.tipAmountHint,
-              hintStyle: TextStyle(color: ds.dim),
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: ds.primary)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: ds.primary, width: 2)),
-            ),
-            style: TextStyle(color: ds.primary, fontSize: 18),
-            validator: (v) {
-              if (v == null || v.trim().isEmpty) return l10n.tipInvalidAmount;
-              final amount = double.tryParse(v.trim());
-              if (amount == null || amount <= 0) return l10n.tipInvalidAmount;
-              return null;
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (!formKey.currentState!.validate()) return;
-              Navigator.pop(ctx);
-              await _sendTip(double.parse(controller.text.trim()));
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: ds.primary),
-            child: Text(l10n.tipSend, style: TextStyle(color: ds.bg)),
-          ),
-        ],
-      ),
+      builder: (ctx) => TipWidget(walletAddress: _walletAddress!),
     );
-  }
-
-  Future<void> _sendTip(double amountSkr) async {
-    final ds = context.ds;
-    final l10n = AppLocalizations.of(context);
-
-    // Show loading
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: ds.bg,
-        content: Row(
-          children: [
-            CircularProgressIndicator(color: ds.primary),
-            SizedBox(width: 16),
-            Text(l10n.tipSending, style: TextStyle(color: ds.primary)),
-          ],
-        ),
-      ),
-    );
-
-    try {
-      // Build SPL token transfer transaction
-      final blockhash = await _getBlockhash();
-      debugPrint('TIP: got blockhash=$blockhash');
-      final txBytes = await _buildTipTransaction(
-        ownerAddress: _walletAddress!,
-        amountSkr: amountSkr,
-        blockhash: blockhash,
-      );
-      debugPrint('TIP: building ok, txBytes.len=${txBytes.length}');
-
-      // Send via MWA/Seed Vault
-      final channel = MethodChannel('device_stats/usage');
-      final MsgB64 = base64Encode(Uint8List.fromList(txBytes));
-      debugPrint('TIP: BASE64=$MsgB64');
-      debugPrint('TIP: invoking sendTip, bytes=${txBytes.length}');
-      final response = await channel.invokeMethod<Map>('sendTip', {
-        'message_bytes': txBytes,
-      });
-      debugPrint('TIP: sendTip returned response=${response == null ? "null" : response.keys}');
-
-      if (!mounted) return;
-      Navigator.pop(context); // dismiss loading
-
-      if (response == null || response['signature'] == null) {
-        throw Exception(l10n.tipNoWallet);
-      }
-
-      final sigB64 = response['signature'] as String;
-      final sigBytes = base64.decode(sigB64);
-      final sig = base58Encode(Uint8List.fromList(sigBytes));
-
-      if (!mounted) return;
-      _showSnack(l10n.tipSuccess(sig));
-    } catch (e) {
-      debugPrint('TIP: dart error -> $e');
-      if (!mounted) return;
-      Navigator.pop(context); // dismiss loading
-      _showSnack(l10n.tipError(e.toString()));
-    }
-  }
-
-  Future<String> _getBlockhash() async {
-    const maxAttempts = 3;
-    for (var attempt = 0; ; attempt++) {
-      final resp = await http.post(
-        Uri.parse(rpcUrl()),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'jsonrpc': '2.0',
-          'id': 1,
-          'method': 'getLatestBlockhash',
-          'params': [{'commitment': 'finalized'}],
-        }),
-      ).timeout(const Duration(seconds: 20));
-
-      if (resp.statusCode == 429 && attempt < maxAttempts - 1) {
-        await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
-        continue;
-      }
-      if (resp.statusCode != 200) throw Exception('RPC HTTP ${resp.statusCode}');
-
-      final json = jsonDecode(resp.body) as Map<String, dynamic>;
-      if (json['error'] != null) throw Exception('RPC error: ${json['error']}');
-      return (json['result'] as Map<String, dynamic>)['value']['blockhash'] as String;
-    }
-  }
-
-  Future<List<int>> _buildTipTransaction({
-    required String ownerAddress,
-    required double amountSkr,
-    required String blockhash,
-  }) async {
-    final owner = Ed25519HDPublicKey.fromBase58(ownerAddress);
-    final mint = Ed25519HDPublicKey.fromBase58(_skrMint);
-
-    // Derive sender's associated token account (ATA)
-    final senderAta = await findAssociatedTokenAddress(owner: owner, mint: mint);
-    // Derive recipient ATA (tip destination - developer wallet)
-    const devAddress = '5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm';
-    final devPubkey = Ed25519HDPublicKey.fromBase58(devAddress);
-    final recipientAta = await findAssociatedTokenAddress(owner: devPubkey, mint: mint);
-
-    final amountRaw = (amountSkr * pow(10, _skrDecimals)).round();
-
-    // Create recipient ATA if it doesn't exist (idempotent - safe to include)
-    final createAtaIx = AssociatedTokenAccountInstruction.createAccountIdempotent(
-      funder: owner,
-      address: recipientAta,
-      owner: devPubkey,
-      mint: mint,
-    );
-
-    final transferIx = TokenInstruction.transfer(
-      source: senderAta,
-      destination: recipientAta,
-      owner: owner,
-      amount: amountRaw,
-      signers: [owner],
-    );
-
-    final message = Message(instructions: [createAtaIx, transferIx]);
-    final compiled = message.compile(
-      recentBlockhash: blockhash,
-      feePayer: owner,
-    );
-
-    // MWA signAndSendTransactions expects the serialized MESSAGE (the wallet
-    // appends signatures itself). Do NOT wrap into SignedTx with placeholder
-    // signatures — a full tx with zeroed sigs is mis-parsed as a native SOL
-    // transfer and fails to sign.
-    return compiled.toByteArray().toList();
   }
 
   void _showSnack(String msg) {
@@ -2543,7 +2580,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final widgets = <Widget>[
       Text(
         '[ $title ]',
-        style: TextStyle(color: ds.primary, fontSize: 20, letterSpacing: 2),
+        style: TextStyle(
+          color: ds.primary,
+          fontSize: PipText.heading,
+          letterSpacing: 2,
+          shadows: ds.crt ? pipGlow(ds.primary) : null,
+        ),
       ),
       SizedBox(height: 6),
     ];
@@ -2563,7 +2605,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               flex: 2,
               child: Text(
                 _formatKey(key),
-                style: TextStyle(color: ds.dim, fontSize: 13, letterSpacing: 1),
+                style: TextStyle(color: ds.dim, fontSize: PipText.label, letterSpacing: 1),
               ),
             ),
             SizedBox(width: 12),
@@ -2571,7 +2613,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               flex: 3,
               child: Text(
                 valStr,
-                style: TextStyle(color: ds.primary, fontSize: 13),
+                style: TextStyle(
+                  color: ds.primary,
+                  fontSize: PipText.value,
+                  shadows: ds.crt ? pipGlow(ds.primary, blur: 5) : null,
+                ),
                 textAlign: TextAlign.right,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -2591,37 +2637,74 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets);
   }
 
+  /// Turns a camelCase data key into a display label.
+  ///
+  /// Unit suffixes are stripped because [_formatValue] already renders the
+  /// unit — leaving them produced labels that contradicted their own value,
+  /// e.g. "MAX FREQ KHZ" next to "2.50 GHz". Keys that are not camelCase
+  /// (network interface names like `wlan0 (IPv6)`) are passed through, since
+  /// splitting on capitals mangled them into "WLAN0 ( I PV6)".
   String _formatKey(String key) {
-    return key.replaceAllMapped(RegExp(r'([A-Z])'), (m) => ' ${m[1]}').trim().toUpperCase();
+    if (key.contains(' ') || key.contains('(')) return key.toUpperCase();
+
+    var name = key;
+    for (final suffix in const [
+      'Bytes',
+      'Khz',
+      'Mah',
+      'Uah',
+      'Percent',
+      'Dpi',
+      'Hz',
+      'Ma',
+      'Ua',
+      'Uv',
+      'C',
+      'V',
+    ]) {
+      if (name.length > suffix.length && name.endsWith(suffix)) {
+        name = name.substring(0, name.length - suffix.length);
+        break;
+      }
+    }
+    return name
+        .replaceAllMapped(RegExp(r'([A-Z])'), (m) => ' ${m[1]}')
+        .trim()
+        .toUpperCase();
   }
 
+  /// Renders a raw device-info value for display.
+  ///
+  /// Matching is on an explicit unit **suffix** in the key, not on fuzzy
+  /// `contains`. The previous version matched `endsWith('v')` (so `voltageV`,
+  /// already in volts, was reformatted as microvolts and rendered "4 µV") and
+  /// `contains('temp') && contains('c')` (so `temperatureC`, already in °C,
+  /// was divided by ten again and showed 27 °C as "2.7 °C").
   String _formatValue(String key, dynamic value) {
     if (value == null) return 'N/A';
-    final v = value is int ? value.toDouble() : (value is double ? value : double.tryParse(value.toString()));
+    if (value is bool) return value ? 'YES' : 'NO';
+    if (value is String) return value.isEmpty ? 'N/A' : value;
+
+    final v = value is num ? value.toDouble() : double.tryParse('$value');
     if (v == null) return value.toString();
-    final kl = key.toLowerCase();
-    if (kl.contains('bytes') || kl.endsWith('size')) {
-      return _formatBytes(v);
-    }
-    if (kl.contains('freq') || kl.endsWith('khz') || kl.endsWith('mhz') || kl.endsWith('ghz')) {
-      return _formatFreq(v);
-    }
-    if (kl.contains('temp') && kl.contains('c')) {
-      return _formatTemp(v);
-    }
-    if (kl.contains('volt') || kl.endsWith('v') || kl.endsWith('voltage')) {
-      return _formatVoltage(v);
-    }
-    if (kl.contains('chargecounter') || kl.contains('capacity') && kl.contains('uah') || kl.endsWith('uah')) {
-      return _formatCharge(v);
-    }
-    if (kl.contains('current') && kl.contains('ua')) {
-      return _formatCurrent(v);
-    }
-    if (kl.contains('percent') || kl.endsWith('pct') || kl.endsWith('level')) {
-      return '${v.round()}%';
-    }
-    return value.toString();
+
+    if (key.endsWith('Bytes')) return _formatBytes(v);
+    if (key.endsWith('Khz')) return _formatFreq(v);
+    if (key.endsWith('Hz')) return '${v.round()} Hz';
+    if (key.endsWith('C')) return '${v.toStringAsFixed(1)} °C';
+    if (key.endsWith('V')) return '${v.toStringAsFixed(2)} V';
+    if (key.endsWith('Mah')) return '${v.round()} mAh';
+    if (key.endsWith('Ma')) return '${v.round()} mA';
+    if (key.endsWith('Percent')) return '${v.round()}%';
+    if (key.endsWith('Dpi')) return '${v.round()} dpi';
+
+    // Legacy keys from readBatteryInfo, still carrying micro-units.
+    if (key.endsWith('Uah')) return '${(v / 1000).round()} mAh';
+    if (key.endsWith('Ua')) return '${(v / 1000).round()} mA';
+    if (key.endsWith('Uv')) return '${(v / 1000000).toStringAsFixed(2)} V';
+
+    if (v == v.roundToDouble()) return v.round().toString();
+    return v.toStringAsFixed(2);
   }
 
   String _formatBytes(double bytes) {
@@ -2637,28 +2720,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return '${khz.round()} kHz';
   }
 
-  String _formatTemp(double tempC10) {
-    final c = tempC10 / 10.0;
-    return '${c.toStringAsFixed(1)} °C';
-  }
 
-  String _formatVoltage(double uv) {
-    if (uv >= 1000000) return '${(uv / 1000000).toStringAsFixed(2)} V';
-    if (uv >= 1000) return '${(uv / 1000).toStringAsFixed(1)} mV';
-    return '${uv.round()} µV';
-  }
 
-  String _formatCharge(double uah) {
-    if (uah >= 1000000) return '${(uah / 1000000).toStringAsFixed(2)} Ah';
-    if (uah >= 1000) return '${(uah / 1000).toStringAsFixed(1)} mAh';
-    return '${uah.round()} µAh';
-  }
 
-  String _formatCurrent(double ua) {
-    if (ua >= 1000000) return '${(ua / 1000000).toStringAsFixed(2)} A';
-    if (ua >= 1000) return '${(ua / 1000).toStringAsFixed(1)} mA';
-    return '${ua.round()} µA';
-  }
 
   Future<void> _showAppMenu(String pkg) async {
     final ds = context.ds;
@@ -2678,7 +2742,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
               child: Text(
                 '> $pkg',
-                style: TextStyle(color: ds.dim, fontSize: 20),
+                style: TextStyle(color: ds.dim, fontSize: PipText.heading),
               ),
             ),
             ListTile(
@@ -2723,12 +2787,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(l10n.enterKnownCapacityMah, style: TextStyle(color: ds.dim, fontSize: 13)),
+              Text(l10n.enterKnownCapacityMah, style: TextStyle(color: ds.dim, fontSize: PipText.label)),
               SizedBox(height: 12),
               TextField(
                 controller: controller,
                 keyboardType: TextInputType.number,
-                style: TextStyle(color: ds.primary, fontSize: 18),
+                style: TextStyle(color: ds.primary, fontSize: PipText.value),
                 decoration: InputDecoration(
                   hintText: 'e.g. 4500',
                   hintStyle: TextStyle(color: ds.dark),

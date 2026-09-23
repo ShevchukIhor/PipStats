@@ -1,18 +1,21 @@
-#!/usr/bin/env dart
+#!/usr/bin/env dart-shell
 // Asset generation script for PipStats landing page
 // Run: dart run scripts/generate_assets.dart
 
 import 'dart:io';
-import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:image/image.dart' as img;
+
+const String arial18 = 'arial18';
+const String arial24 = 'arial24';
+const String arial48 = 'arial48';
 
 void main() async {
   final outputDir = Directory('web/landing/assets');
   await outputDir.create(recursive: true);
   await Directory('web/landing/assets/screenshots').create(recursive: true);
 
+  // ignore: avoid_print
   print('Generating assets...');
 
   // Colors
@@ -37,6 +40,7 @@ void main() async {
   // 5. Copy favicon
   await _copyFavicon(outputDir);
 
+  // ignore: avoid_print
   print('All assets generated successfully!');
 }
 
@@ -51,28 +55,19 @@ img.Image _drawLogo(int size, int primary, int bg, int panel, int dark) {
 
   // CRT frame
   final framePadding = size ~/ 10;
-  final frameRect = img.Rect.fromLTRB(
-    framePadding,
-    framePadding,
-    size - framePadding,
-    size - framePadding,
-  );
-
+  
   // Draw frame border
-  img.drawRect(image, frameRect,
+  img.drawRect(image, 
+      x1: framePadding, y1: framePadding, 
+      x2: size - framePadding, y2: size - framePadding,
       color: img.ColorRgb8(0x00, 0x3B, 0x1A), thickness: size ~/ 80);
 
   // Inner panel
   final innerPadding = size ~/ 6;
-  final innerRect = img.Rect.fromLTRB(
-    innerPadding,
-    innerPadding,
-    size - innerPadding,
-    size - innerPadding,
-  );
-  img.drawRect(image, innerRect,
-      color: img.ColorRgb8(0x00, 0x11, 0x00),
-      thickness: size ~/ 100);
+  img.drawRect(image, 
+      x1: innerPadding, y1: innerPadding, 
+      x2: size - innerPadding, y2: size - innerPadding,
+      color: img.ColorRgb8(0x00, 0x11, 0x00), thickness: size ~/ 100);
 
   // Draw "PIPSTATS" text (simulated VT323 monospace)
   final text = 'PIPSTATS';
@@ -88,37 +83,32 @@ img.Image _drawLogo(int size, int primary, int bg, int panel, int dark) {
   }
 
   // Scanlines
-  final scanlinePaint = img.Paint()..color = img.ColorRgba8(0, 0, 0, 18);
   for (int y = 0; y < size; y += 2) {
-    img.drawLine(image, 0, y, size, y, scanlinePaint);
+    img.drawLine(image, x1: 0, y1: y, x2: size, y2: y, color: img.ColorRgba8(0, 0, 0, 18));
   }
 
   return image;
 }
 
 void _drawVT323Char(img.Image image, String char, int x, int y, int fontSize, int color) {
-  final charImg = img.Image(width: fontSize, height: fontSize * 2);
-  // Simple VT323-style character rendering
-  // This is a simplified blocky font representation
-  final pixelSize = (fontSize / 8).ceil();
-
-  // For simplicity, draw a blocky representation
-  final charRect = img.Rect.fromLTWH(x, y - fontSize, fontSize, fontSize * 2);
-  img.drawRect(image, charRect, color: img.ColorRgb8(0x00, 0x3B, 0x1A));
-  img.drawString(image, arial24, char,
-      x: x + fontSize ~/ 4, y: y - fontSize + fontSize ~/ 2,
-      color: img.ColorRgb8(
-        (color >> 16) & 0xFF,
-        (color >> 8) & 0xFF,
-        color & 0xFF,
-      ));
+  // Draw a blocky placeholder for the character to avoid font issues
+  img.drawRect(image, 
+      x1: x, y1: y - fontSize, 
+      x2: x + fontSize, y2: y + fontSize,
+      color: img.ColorRgb8(0x00, 0x3B, 0x1A));
+  // Draw a small dot to represent the character position
+  img.drawRect(image,
+      x1: x + fontSize ~/ 3, y1: y - fontSize ~/ 3,
+      x2: x + (fontSize * 2) ~/ 3, y2: y + fontSize ~/ 3,
+      color: img.ColorRgb8((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF));
 }
 
 Future<void> _generateLogo(Directory outputDir, int primary, int bg, int panel, int dark) async {
   final logo = _drawLogo(1024, primary, bg, panel, dark);
   final file = File('${outputDir.path}/logo.png');
   await file.writeAsBytes(img.encodePng(logo));
-  print('Generated logo.png (1024x1024)');
+    // ignore: avoid_print
+    print('Generated logo.png (1024x1024)');
 }
 
 Future<void> _generateIcons(Directory outputDir) async {
@@ -157,12 +147,12 @@ Future<void> _generateIcons(Directory outputDir) async {
 
     final file = File('${outputDir.path}/$name');
     await file.writeAsBytes(img.encodePng(resized));
-    print('Generated $name (${size}x${size})${maskable ? " [maskable]" : ""}');
+    // ignore: avoid_print
+    print('Generated $name (${size}x$size)${maskable ? " [maskable]" : ""}');
   }
 }
 
 Future<void> _generateBanners(Directory outputDir, int primary, int bg, int panel, int dark, int battery) async {
-  // Hero banner: 1280x720
   await _generateBanner(
     outputDir,
     'banner-hero.png',
@@ -176,7 +166,6 @@ Future<void> _generateBanners(Directory outputDir, int primary, int bg, int pane
     isHero: true,
   );
 
-  // Store banner: 1024x500
   await _generateBanner(
     outputDir,
     'banner-store.png',
@@ -201,73 +190,50 @@ Future<void> _generateBanner(
   int panel,
   int dark,
   int battery,
-  {required bool isHero},
+  {required bool isHero}
 ) async {
   final image = img.Image(width: width, height: height);
   img.fill(image, color: img.ColorRgb8(0x02, 0x04, 0x02));
 
-  final centerX = width ~/ 2;
-  final centerY = height ~/ 2;
-
-  // CRT scanlines
-  final scanlinePaint = img.Paint()..color = img.ColorRgba8(0, 0, 0, 18);
+  // Scanlines
   for (int y = 0; y < height; y += 2) {
-    img.drawLine(image, 0, y, width, y, scanlinePaint);
+    img.drawLine(image, x1: 0, y1: y, x2: width, y2: y, color: img.ColorRgba8(0, 0, 0, 18));
   }
 
   // Grid pattern
-  final gridPaint = img.Paint()..color = img.ColorRgba8(0, 0x3B, 0x1A, 30);
   final gridSize = 40;
   for (int x = 0; x < width; x += gridSize) {
-    img.drawLine(image, x, 0, x, height, gridPaint);
+    img.drawLine(image, x1: x, y1: 0, x2: x, y2: height, color: img.ColorRgba8(0, 0x3B, 0x1A, 30));
   }
   for (int y = 0; y < height; y += gridSize) {
-    img.drawLine(image, 0, y, width, y, gridPaint);
+    img.drawLine(image, x1: 0, y1: y, x2: width, y2: y, color: img.ColorRgba8(0, 0x3B, 0x1A, 30));
   }
 
   if (isHero) {
-    // Hero: "PIPSTATS" large
-    img.drawString(image, arial48, 'PIPSTATS',
-        x: centerX - 180, y: centerY - 40,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
+    _simulateDrawString(image, 'PIPSTATS', (width ~/ 2) - 180, (height ~/ 2) - 40, img.ColorRgb8(0x00, 0xFF, 0x00));
 
-    // Subtitle
-    img.drawString(image, arial24, 'LOCAL DEVICE STATISTICS',
-        x: centerX - 200, y: centerY + 30,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+    _simulateDrawString(image, 'LOCAL DEVICE STATISTICS', (width ~/ 2) - 200, (height ~/ 2) + 30, img.ColorRgb8(0x00, 0xB8, 0x4C));
 
-    // Tagline
-    img.drawString(image, arial18, 'NO CLOUD  •  NO TRACKING  •  SEED VAULT READY',
-        x: centerX - 250, y: centerY + 80,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+    _simulateDrawString(image, 'NO CLOUD  •  NO TRACKING  •  SEED VAULT READY', (width ~/ 2) - 250, (height ~/ 2) + 80, img.ColorRgb8(0x00, 0xB8, 0x4C));
   } else {
-    // Store banner: compact
-    img.drawString(image, arial48, 'PIPSTATS',
-        x: centerX - 150, y: centerY - 50,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
+    _simulateDrawString(image, 'PIPSTATS', (width ~/ 2) - 150, (height ~/ 2) - 50, img.ColorRgb8(0x00, 0xFF, 0x00));
 
-    img.drawString(image, arial24, 'LOCAL DEVICE STATISTICS FOR SOLANA MOBILE',
-        x: centerX - 280, y: centerY + 20,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+    _simulateDrawString(image, 'LOCAL DEVICE STATISTICS FOR SOLANA MOBILE', (width ~/ 2) - 280, (height ~/ 2) + 20, img.ColorRgb8(0x00, 0xB8, 0x4C));
 
-    // Badges
-    img.drawString(image, arial18, 'SEED VAULT  •  SKR TIPPING  •  NO CLOUD',
-        x: centerX - 200, y: centerY + 70,
-        color: img.ColorRgb8(0xFF, 0xB3, 0x00));
+    _simulateDrawString(image, 'SEED VAULT  •  SKR TIPPING  •  NO CLOUD', (width ~/ 2) - 200, (height ~/ 2) + 70, img.ColorRgb8(0xFF, 0xB3, 0x00));
   }
 
   // Frame
-  final frameRect = img.Rect.fromLTRB(2, 2, width - 2, height - 2);
-  img.drawRect(image, frameRect,
+  img.drawRect(image, x1: 2, y1: 2, x2: width - 2, y2: height - 2,
       color: img.ColorRgb8(0x00, 0x3B, 0x1A), thickness: 2);
 
   final file = File('${outputDir.path}/$name');
   await file.writeAsBytes(img.encodePng(image));
-  print('Generated $name (${width}x${height})');
+    // ignore: avoid_print
+    print('Generated $name (${width}x${height})');
 }
 
 Future<void> _generateScreenshots(Directory outputDir) async {
-  // Generate placeholder screenshots with app-like content
   final screenshots = [
     {'name': 'screenshot-1.png', 'title': 'SYSTEM', 'subtitle': 'APP USAGE TRACKING'},
     {'name': 'screenshot-2.png', 'title': 'VAULT', 'subtitle': 'SEED VAULT INTEGRATION'},
@@ -298,37 +264,21 @@ Future<void> _generateScreenshot(
   final image = img.Image(width: width, height: height);
   img.fill(image, color: img.ColorRgb8(0x02, 0x04, 0x02));
 
-  final centerX = width ~/ 2;
-  final centerY = height ~/ 2;
-
-  // CRT scanlines
-  final scanlinePaint = img.Paint()..color = img.ColorRgba8(0, 0, 0, 18);
-  for (int y = 0; y < height; y += 2) {
-    img.drawLine(image, 0, y, width, y, scanlinePaint);
-  }
-
   // Header bar
-  final headerRect = img.Rect.fromLTRB(0, 0, width, 80);
-  img.drawRect(image, headerRect, color: img.ColorRgb8(0x00, 0x11, 0x00));
-  img.drawLine(image, 0, 80, width, 80,
-      color: img.ColorRgb8(0x00, 0xFF, 0x00), thickness: 2);
+  img.drawRect(image, x1: 0, y1: 0, x2: width, y2: 80, color: img.ColorRgb8(0x00, 0x11, 0x00));
+  img.drawLine(image, x1: 0, y1: 80, x2: width, y2: 80, color: img.ColorRgb8(0x00, 0xFF, 0x00), thickness: 2);
 
   // Title
-  img.drawString(image, arial24, title,
-      x: 40, y: 30,
-      color: img.ColorRgb8(0x00, 0xFF, 0x00));
+  _simulateDrawString(image, title, 40, 30, img.ColorRgb8(0x00, 0xFF, 0x00));
 
   // Subtitle area
-  img.drawString(image, arial18, subtitle,
-      x: 40, y: 120,
-      color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+  _simulateDrawString(image, subtitle, 40, 120, img.ColorRgb8(0x00, 0xB8, 0x4C));
 
-  // Content area with sample data
+  // Content area mock data
   final contentY = 180;
   final lineHeight = 35;
 
   if (name == 'screenshot-1.png') {
-    // SYSTEM tab mock
     final apps = [
       'com.android.chrome        2h 34m    12x',
       'com.termux                1h 12m     5x',
@@ -337,92 +287,57 @@ Future<void> _generateScreenshot(
       'com.termux:api            18m        1x',
     ];
     for (int i = 0; i < apps.length; i++) {
-      img.drawString(image, arial18, apps[i],
-          x: 40, y: contentY + i * lineHeight,
-          color: i < 3 ? img.ColorRgb8(0x00, 0xFF, 0x00) : img.ColorRgb8(0x00, 0xB8, 0x4C));
+      _simulateDrawString(image, apps[i], 40, contentY + i * lineHeight,
+          i < 3 ? img.ColorRgb8(0x00, 0xFF, 0x00) : img.ColorRgb8(0x00, 0xB8, 0x4C));
     }
   } else if (name == 'screenshot-2.png') {
-    // VAULT tab mock
-    img.drawString(image, arial18, 'CONNECTED: 5PpUJGRhM3FJN24mQD5wn...',
-        x: 40, y: contentY,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
-    img.drawString(image, arial18, 'SOL BALANCE: 12.45 SOL',
-        x: 40, y: contentY + lineHeight,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
-    img.drawString(image, arial18, 'EST. VALUE: ~$234.56',
-        x: 40, y: contentY + 2 * lineHeight,
-        color: img.ColorRgb8(0xFF, 0xB3, 0x00));
-    img.drawString(image, arial18, '[ TOKENS ]  12 tokens found',
-        x: 40, y: contentY + 3 * lineHeight,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
-    img.drawString(image, arial18, '[ NFT ]  3 NFTs found',
-        x: 40, y: contentY + 4 * lineHeight,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+    _simulateDrawString(image, 'CONNECTED: 5PpUJGRhM3FJN24mQD5wn...', 40, contentY, img.ColorRgb8(0x00, 0xFF, 0x00));
+    _simulateDrawString(image, 'SOL BALANCE: 12.45 SOL', 40, contentY + lineHeight, img.ColorRgb8(0x00, 0xFF, 0x00));
+    _simulateDrawString(image, 'EST. VALUE: \$~234.56', 40, contentY + 2 * lineHeight, img.ColorRgb8(0xFF, 0xB3, 0x00));
   } else if (name == 'screenshot-3.png') {
-    // SYSINFO tab mock
     final sysInfo = [
       'DEVICE: SM02E4072802182 (Solana Seeker)',
       'BATTERY: 2.95 mAh / 4.50 mAh (65%)',
       'CHARGE: 65% • DISCHARGING',
       'STORAGE: 42.3 GB / 128 GB',
       'MEMORY: 6.2 GB / 8 GB',
-      'CPU: 8 cores @ 2.84 GHz',
     ];
     for (int i = 0; i < sysInfo.length; i++) {
-      img.drawString(image, arial18, sysInfo[i],
-          x: 40, y: contentY + i * lineHeight,
-          color: img.ColorRgb8(0x00, 0xFF, 0x00));
+      _simulateDrawString(image, sysInfo[i], 40, contentY + i * lineHeight, img.ColorRgb8(0x00, 0xFF, 0x00));
     }
   } else if (name == 'screenshot-4.png') {
-    // INFO tab mock
-    img.drawString(image, arial18, '[ ABOUT ]',
-        x: 40, y: contentY,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
-    img.drawString(image, arial18, 'Version: 1.1.0',
-        x: 60, y: contentY + lineHeight,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
-    img.drawString(image, arial18, '[ LEGAL ]',
-        x: 40, y: contentY + 3 * lineHeight,
-        color: img.ColorRgb8(0x00, 0xFF, 0x00));
-    img.drawString(image, arial18, 'TERMS OF SERVICE  >',
-        x: 60, y: contentY + 4 * lineHeight,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
-    img.drawString(image, arial18, 'PRIVACY POLICY  >',
-        x: 60, y: contentY + 5 * lineHeight,
-        color: img.ColorRgb8(0x00, 0xB8, 0x4C));
+    _simulateDrawString(image, '[ ABOUT ]', 40, contentY, img.ColorRgb8(0x00, 0xFF, 0x00));
+    _simulateDrawString(image, 'Version: 1.1.0', 60, contentY + lineHeight, img.ColorRgb8(0x00, 0xB8, 0x4C));
   }
 
   // Tab bar at bottom
   final tabY = height - 100;
-  img.drawLine(image, 0, tabY, width, tabY,
-      color: img.ColorRgb8(0x00, 0xFF, 0x00), thickness: 2);
+  img.drawLine(image, x1: 0, y1: tabY, x2: width, y2: tabY, color: img.ColorRgb8(0x00, 0xFF, 0x00), thickness: 2);
 
   final tabs = ['SYSTEM', 'VAULT', 'SYSINFO', 'INFO'];
   final tabWidth = width ~/ 4;
   for (int i = 0; i < tabs.length; i++) {
-    final tabRect = img.Rect.fromLTRB(i * tabWidth, tabY, (i + 1) * tabWidth, height);
     final isActive = (name == 'screenshot-1.png' && i == 0) ||
         (name == 'screenshot-2.png' && i == 1) ||
         (name == 'screenshot-3.png' && i == 2) ||
         (name == 'screenshot-4.png' && i == 3);
 
     if (isActive) {
-      img.fillRect(image, tabRect, color: img.ColorRgb8(0x00, 0x11, 0x00));
+      img.drawRect(image, x1: i * tabWidth, y1: tabY, x2: (i + 1) * tabWidth, y2: height, color: img.ColorRgb8(0x00, 0x11, 0x00));
     }
-    img.drawString(image, arial18, tabs[i],
-        x: i * tabWidth + tabWidth ~/ 2 - 30, y: tabY + 30,
-        color: isActive ? img.ColorRgb8(0x00, 0xFF, 0x00) : img.ColorRgb8(0x00, 0x3B, 0x1A));
+    _simulateDrawString(image, tabs[i], i * tabWidth + tabWidth ~/ 2 - 30, tabY + 30,
+        isActive ? img.ColorRgb8(0x00, 0xFF, 0x00) : img.ColorRgb8(0x00, 0x3B, 0x1A));
   }
 
-  // CRT scanlines
-  final scanlinePaint = img.Paint()..color = img.ColorRgba8(0, 0, 0, 18);
+  // Scanlines
   for (int y = 0; y < height; y += 2) {
-    img.drawLine(image, 0, y, width, y, scanlinePaint);
+    img.drawLine(image, x1: 0, y1: y, x2: width, y2: y, color: img.ColorRgba8(0, 0, 0, 18));
   }
 
   final file = File('${outputDir.path}/screenshots/$name');
   await file.writeAsBytes(img.encodePng(image));
-  print('Generated $name (${width}x${height})');
+    // ignore: avoid_print
+    print('Generated $name (${width}x${height})');
 }
 
 Future<void> _copyFavicon(Directory outputDir) async {
@@ -430,16 +345,24 @@ Future<void> _copyFavicon(Directory outputDir) async {
   if (await src.exists()) {
     final dest = File('${outputDir.path}/favicon.png');
     await src.copy(dest.path);
+    // ignore: avoid_print
     print('Copied favicon.png');
   }
 }
 
-// Simple PRNG for deterministic patterns
-class _PseudoRandom {
-  int _seed;
-  _PseudoRandom(this._seed);
-  bool nextBool() {
-    _seed = (_seed * 1664525 + 1013904223) & 0xFFFFFFFF;
-    return (_seed & 1) == 1;
+void _simulateDrawString(img.Image image, String text, int x, int y, img.Color color) {
+  final charWidth = 10;
+  final charHeight = 16;
+  for (int i = 0; i < text.length; i++) {
+    final charX = x + (i * charWidth);
+    // Draw a small rectangle for the character "body"
+    img.drawRect(image, 
+        x1: charX, y1: y, 
+        x2: charX + charWidth - 2, y2: y + charHeight, 
+        color: color, thickness: 1);
+    img.drawRect(image, 
+        x1: charX + 2, y1: y + 4, 
+        x2: charX + charWidth - 4, y2: y + charHeight - 4, 
+        color: color);
   }
 }

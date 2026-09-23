@@ -31,7 +31,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get uptime => 'АПТАЙМ';
 
   @override
-  String get batteryCapacity => 'ЄМНІСТЬ БАТАРЕЇ';
+  String get batteryCapacity => 'ЄМНІСТЬ';
 
   @override
   String get screenTime => 'ЕКРАННИЙ ЧАС';
@@ -417,8 +417,70 @@ class AppLocalizationsUk extends AppLocalizations {
   String get tipInvalidAmount => 'НЕВІРНА СУМА';
 
   @override
+  String get tipCancelled => 'ТРАНЗАКЦІЮ СКАСОВАНО';
+
+  @override
+  String get tipNoSkrAccount => 'НЕ ЗНАЙДЕНО АКАУНТУ SKR ДЛЯ ЦЬОГО ГАМАНЦЯ.';
+
+  @override
+  String get tipAuthRequired => 'ПОТРІБНА АВТОРИЗАЦІЯ MWA';
+
+  @override
+  String get tipIdentityMismatch => 'НЕВІДПОВІДНІСТЬ ІДЕНТИФІКАЦІЇ ГАМАНЦЯ';
+
+  @override
+  String get tipInsufficientSol => 'НЕДОСТАТНЬО SOL';
+
+  @override
+  String get tipInsufficientSkr => 'НЕДОСТАТНЬО SKR';
+
+  @override
   String get aboutTitle => 'ПРО DEVICE STATS';
 
   @override
   String get website => 'ВЕБСАЙТ';
+
+  @override
+  String get delegationAlertTitle => '! АКТИВНІ ДОЗВОЛИ НА ТОКЕНИ';
+
+  @override
+  String delegationAlertBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString токен-акаунтів мають активних делегатів',
+      few: '$countString токен-акаунти мають активних делегатів',
+      one: '1 токен-акаунт має активного делегата',
+    );
+    return '$_temp0, який може витрачати ці токени без повторного запиту. Відкличте ті, яких не впізнаєте.';
+  }
+
+  @override
+  String get monitoringTitle => 'МОНІТОРИНГ ПЕРЕРВАНО';
+
+  @override
+  String get monitoringStopped =>
+      'Фоновий збір не працює — в історії використання та батареї будуть прогалини.';
+
+  @override
+  String get monitoringRestart => 'ПЕРЕЗАПУСТИТИ';
+
+  @override
+  String get monitoringBatteryOpt =>
+      'Керування живленням Android може вбивати фоновий збір на цьому пристрої.';
+
+  @override
+  String get monitoringAllow => 'ДОЗВОЛИТИ';
+
+  @override
+  String get monitoringNoNotif =>
+      'Сповіщення заблоковані, тож сповіщення моніторингу не показується.';
+
+  @override
+  String get monitoringEnableNotif => 'УВІМКНУТИ';
 }
