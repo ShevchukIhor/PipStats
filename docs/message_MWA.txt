@@ -1,0 +1,208 @@
+Ось повна реалізація tip-функціоналу на Flutter з використанням MWA та SKR:
+Потрібні пакети
+dependencies:
+  solana: ^0.32.0+1
+  solana_mobile_client: ^0.1.2
+Основний код
+import 'package:flutter/material.dart';
+import 'package:solana/encoder.dart';
+import 'package:solana/solana.dart';
+import 'package:solana_mobile_client/solana_mobile_client.dart';
+
+class TipService {
+  // SKR token mint address
+  static const String skrMint = 'SKRbvo6Gf7GondiT3BbTfuRDPqLWei4j2Qy2NPGZhW3';
+  // SKR decimals (перевірте на SolanaFM/Solscan)
+  static const int skrDecimals = 9;
+
+  final SolanaClient _solanaClient;
+
+  TipService({required String rpcUrl})
+      : _solanaClient = SolanaClient(rpcUrl: Uri.parse(rpcUrl));
+
+  /// Знаходить або створює token account для SKR
+  Future<String?> findTokenAccount({
+    required Ed25519HDPublicKey owner,
+  }) async {
+    final accounts = await _solanaClient.rpcClient.getTokenAccountsByOwner(
+      owner: owner.toBase58(),
+      mint: skrMint,
+    );
+
+    return accounts.value.isNotEmpty
+        ? accounts.value.first.pubkey
+        : null;
+  }
+
+  /// Створює transaction для відправки tip у SKR
+  Future<Uint8List> buildTipTransaction({
+    required Ed25519HDPublicKey sender,
+    required String senderTokenAccount,
+    required String recipientTokenAccount,
+    required double skrAmount,
+    required String recentBlockhash,
+  }) async {
+    final amount = (skrAmount * pow(10, skrDecimals)).toInt();
+
+    final transferInstruction = TokenInstruction.transferChecked(
+      amount: amount,
+      decimals: skrDecimals,
+      source: Ed25519HDPublicKey.fromBase58(senderTokenAccount),
+      mint: Ed25519HDPublicKey.fromBase58(skrMint),
+      destination: Ed25519HDPublicKey.fromBase58(recipientTokenAccount),
+      owner: sender,
+    );
+
+    final message = Message.only(transferInstruction);
+    final compiled = message.compile(
+      recentBlockhash: recentBlockhash,
+      feePayer: sender,
+    );
+
+    return compiled.toByteArray();
+  }
+
+  /// Повний flow: авторизація + підпис + відправка tip
+  Future<void> sendTip({
+    required Ed25519HDPublicKey sender,
+    required String senderTokenAccount,
+    required String recipientTokenAccount,
+    required double skrAmount,
+    required String identityUri,
+    required String iconUri,
+    required String identityName,
+  }) async {
+    // 1. Створюємо MWA session
+    final session = await LocalAssociationScenario.create();
+    session.startActivityForResult(null);
+    final client = await session.start();
+
+    // 2. Авторизація
+    final result = await client.authorize(
+      identityUri: Uri.parse(identityUri),
+      iconUri: Uri.parse(iconUri),
+      identityName: identityName,
+      cluster: mainnetCluster,
+    );
+    if (result == null) {
+      await session.close();
+      throw Exception('Авторизація відхилена');
+    }
+
+    // 3. Отримуємо blockhash
+    final blockhash = (await _solanaClient.rpcClient.getLatestBlockhash())
+        .value
+        .blockhash;
+
+    // 4. Будуємо transaction
+    final txBytes = await buildTipTransaction(
+      sender: sender,
+      senderTokenAccount: senderTokenAccount,
+      recipientTokenAccount: recipientTokenAccount,
+      skrAmount: skrAmount,
+      recentBlockhash: blockhash,
+    );
+
+    // 5. Підписуємо і відправляємо через MWA
+    final response = await client.signAndSendTransactions(
+      transactions: [txBytes],
+    );
+
+    await session.close();
+
+    if (response?.status == 'success') {
+      debugPrint('Tip успішно відправлено!');
+    } else {
+      throw Exception('Помилка відправки транзакції');
+    }
+  }
+}
+UI-компонент для tip
+class TipWidget extends StatefulWidget {
+  final String recipientAddress; // recipient's SKR token account
+  final AuthorizationResult authResult;
+
+  const TipWidget({
+    super.key,
+    required this.recipientAddress,
+    required this.authResult,
+  });
+
+  @override
+  State<TipWidget> createState() => _TipWidgetState();
+}
+
+class _TipWidgetState extends State<TipWidget> {
+  final _amountController = TextEditingController();
+  bool _isLoading = false;
+
+  late final TipService _tipService = TipService(
+    rpcUrl: 'https://api.mainnet-beta.solana.com',
+  );
+
+  Future<void> _sendTip() async {
+    final amount = double.tryParse(_amountController.text);
+    if (amount == null || amount <= 0) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      final sender = widget.authResult.publicKey as Ed25519HDPublicKey;
+
+      // Знаходимо token account відправника
+      final senderTokenAccount =
+          await _tipService.findTokenAccount(owner: sender);
+      if (senderTokenAccount == null) {
+        throw Exception('У вас немає SKR на гаманці');
+      }
+
+      await _tipService.sendTip(
+        sender: sender,
+        senderTokenAccount: senderTokenAccount,
+        recipientTokenAccount: widget.recipientAddress,
+        skrAmount: amount,
+        identityUri: 'https://yourapp.com',
+        iconUri: 'https://yourapp.com/icon.png',
+        identityName: 'YourApp Tip',
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Tip $amount SKR відправлено!')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Помилка: $e')),
+      );
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        TextField(
+          controller: _amountController,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'Кількість SKR',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        ElevatedButton(
+          onPressed: _isLoading ? null : _sendTip,
+          child: _isLoading
+              ? const CircularProgressIndicator()
+              : const Text('Надіслати tip'),
+        ),
+      ],
+    );
+  }
+}
+Ключові моменти
+1. transferChecked — безпечніша версія: перевіряє mint і decimals на стороні клієнта
+2. Комісія завжди в SOL — SKR використовується тільки як asset для відправки, fee payer (адреса гаманця) повинна мати SOL
+3. Token accounts — і відправник і одержувач повинні мати token account для SKR (створюється автоматично через createAssociatedTokenAccountAccountInstruction якщо потрібно)
+4. MWA session — завжди закривайте session після операції
