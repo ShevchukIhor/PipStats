@@ -16,6 +16,7 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
 import android.provider.Settings
@@ -30,6 +31,7 @@ import java.io.BufferedReader
 import java.io.FileReader
 import java.net.NetworkInterface
 import java.util.Collections
+import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -40,8 +42,20 @@ class MainActivity : FlutterFragmentActivity() {
 
   private val CHANNEL = "device_stats/usage"
 
+  private val TAG = "PipStats"
+
+  /** True only for debuggable builds; keeps probe logging out of release. */
+  private val isDebuggable: Boolean
+    get() = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
   private companion object {
     const val OVERLAP_MS = 5 * 60 * 1000L
+    const val REQ_POST_NOTIFICATIONS = 4711
+  }
+
+  override fun onDestroy() {
+    WalletConnect.detach(this)
+    super.onDestroy()
   }
 
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -115,9 +129,26 @@ class MainActivity : FlutterFragmentActivity() {
             if (bytes == null) {
               result.error("BAD_ARGS", "message_bytes missing", null)
             } else {
-              WalletConnect.sendTip(this, bytes, result)
+              WalletConnect.signAndSend(this, bytes, result)
             }
           }
+          "areNotificationsEnabled" -> result.success(areNotificationsEnabled())
+          "requestNotificationPermission" -> {
+            requestNotificationPermission()
+            result.success(null)
+          }
+          "isIgnoringBatteryOptimizations" ->
+            result.success(isIgnoringBatteryOptimizations())
+          "requestIgnoreBatteryOptimizations" -> {
+            requestIgnoreBatteryOptimizations()
+            result.success(null)
+          }
+          "isServiceRunning" -> result.success(ForegroundService.isRunning)
+          "startForegroundService" -> {
+            ForegroundService.start(this)
+            result.success(null)
+          }
+          "readBatteryInfo" -> result.success(readBatteryInfo())
           "getDeviceInfo" -> result.success(getDeviceInfo())
           "stopForegroundService" -> {
             ForegroundService.stop(this)
@@ -126,6 +157,70 @@ class MainActivity : FlutterFragmentActivity() {
           else -> result.notImplemented()
         }
       }
+  }
+
+  /**
+   * Whether our notifications are allowed to show.
+   *
+   * A foreground service runs regardless, but its notification is the only
+   * thing that tells the user monitoring is on — and on Android 13+ it is
+   * silently suppressed until POST_NOTIFICATIONS is granted. The app never
+   * asked, so the ongoing notification was invisible on this device
+   * (`appops POST_NOTIFICATION: ignore`).
+   */
+  private fun areNotificationsEnabled(): Boolean =
+    NotificationManagerCompat.from(this).areNotificationsEnabled()
+
+  private fun requestNotificationPermission() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    if (areNotificationsEnabled()) return
+    if (shouldShowRequestPermissionRationale(
+        android.Manifest.permission.POST_NOTIFICATIONS,
+      ) ||
+      checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+    ) {
+      requestPermissions(
+        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+        REQ_POST_NOTIFICATIONS,
+      )
+    }
+  }
+
+  /**
+   * Whether the system has exempted us from Doze/App Standby.
+   *
+   * MediaTek and other OEM builds kill background services aggressively; the
+   * exemption is the only supported way to ask them not to. It is the user's
+   * decision — we can only surface the system dialog.
+   */
+  private fun isIgnoringBatteryOptimizations(): Boolean {
+    val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
+    return pm.isIgnoringBatteryOptimizations(packageName)
+  }
+
+  private fun requestIgnoreBatteryOptimizations() {
+    if (isIgnoringBatteryOptimizations()) return
+    try {
+      // The targeted intent is what actually shows the allow/deny dialog.
+      startActivity(
+        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+          data = Uri.parse("package:$packageName")
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+      )
+    } catch (_: Exception) {
+      // Some builds hide the targeted dialog; fall back to the settings list.
+      try {
+        startActivity(
+          Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          },
+        )
+      } catch (_: Exception) {
+        // nothing further we can do
+      }
+    }
   }
 
   private fun hasUsageAccess(): Boolean {
@@ -204,26 +299,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
   }
 
-  /** Schedule a repeating AlarmManager broadcast every 15 minutes. */
-  private fun scheduleSync() {
-    val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-    val intent = Intent(this, UsageReceiver::class.java).apply {
-      action = UsageReceiver.ACTION_SYNC
-    }
-    val pi = PendingIntent.getBroadcast(
-      this,
-      0,
-      intent,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
-    val interval = 15 * 60 * 1000L
-    am.setInexactRepeating(
-      AlarmManager.RTC_WAKEUP,
-      System.currentTimeMillis() + interval,
-      interval,
-      pi,
-    )
-  }
+  /** Arm the repeating collector alarm (shared with BootReceiver). */
+  private fun scheduleSync() = UsageReceiver.schedule(this)
+
 
   private fun readSysfs(path: String): Long? = try {
     val v = java.io.File(path).readText().trim()
@@ -261,17 +339,12 @@ class MainActivity : FlutterFragmentActivity() {
     val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
     val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
 
-    // Design capacity (uAh): BATTERY_PROPERTY_CAPACITY returns design capacity in mAh
-    // on supported devices per Android docs. However, some devices incorrectly return
-    // the current UI level percentage (0-100) instead. We use a heuristic: value > 100
-    // indicates mAh (design capacity), while <= 100 likely indicates a percentage.
-    // Convert mAh to uAh for consistency.
-    val designCapacity = try {
-      val cap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 0
-      if (cap > 100) cap.toLong() * 1000 else null
-    } catch (_: Exception) {
-      null
-    }
+    // Design capacity (uAh) comes from power_profile.xml. It is NOT
+    // BATTERY_PROPERTY_CAPACITY — that property is a percentage per the
+    // Android docs and returns 100 on this device — and not
+    // charge_full_design either, which this MediaTek gauge reports in a
+    // different scale (294000 for a 4500 mAh cell).
+    val designCapacity = designCapacityMah()?.let { (it * 1000).roundToLong() }
 
     // Full capacity (uAh): prefer derived from counter * scale / level (more accurate
     // than sysfs charge_full on this device). Fall back to sysfs charge_full.
@@ -287,7 +360,9 @@ class MainActivity : FlutterFragmentActivity() {
     val current = prop(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
       ?: readSysfs(base + "current_now")
 
-    Log.e("BATT_PROBE", "full=$full counter=$counter current=$current design=$designCapacity derived=$derivedFull sysfsFull=$sysfsFull")
+    if (isDebuggable) {
+      Log.d(TAG, "battery full=$full counter=$counter current=$current design=$designCapacity")
+    }
     return mapOf(
       "chargeFullUah" to full,
       "chargeCounterUah" to counter,
@@ -439,8 +514,32 @@ class MainActivity : FlutterFragmentActivity() {
       "xdpi" to dm.xdpi.toDouble(),
       "ydpi" to dm.ydpi.toDouble(),
       "refreshRateHz" to refreshRate,
-      "orientation" to resources.configuration.orientation.toLong(),
+      "orientation" to when (resources.configuration.orientation) {
+        android.content.res.Configuration.ORIENTATION_PORTRAIT -> "Portrait"
+        android.content.res.Configuration.ORIENTATION_LANDSCAPE -> "Landscape"
+        else -> "Undefined"
+      },
     )
+  }
+
+  /**
+   * OEM-declared design capacity in mAh, from `power_profile.xml`.
+   *
+   * There is no public API for this. `BATTERY_PROPERTY_CAPACITY` is documented
+   * as a *percentage*, not mAh, and `charge_full_design` on this MediaTek gauge
+   * is reported in a different scale (294000 for a 4500 mAh cell) — both were
+   * previously mistaken for the design capacity.
+   *
+   * `PowerProfile` is an internal class, so this is best-effort: null when the
+   * platform refuses reflection.
+   */
+  private fun designCapacityMah(): Double? = try {
+    val clazz = Class.forName("com.android.internal.os.PowerProfile")
+    val instance = clazz.getConstructor(Context::class.java).newInstance(this)
+    val value = clazz.getMethod("getBatteryCapacity").invoke(instance) as Double
+    if (value > 0) value else null
+  } catch (_: Throwable) {
+    null
   }
 
   private fun getBatteryInfoBlock(): Map<String, Any?> {
@@ -450,13 +549,11 @@ class MainActivity : FlutterFragmentActivity() {
     val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
     val technology = intent?.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY)
     val temperature = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
-    val voltage = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
+    val voltageMv = intent?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) ?: -1
     val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
     val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
     val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1) ?: -1
-    val capacity = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-    val chargeCounter = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
-    val currentNow = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+
     val healthStr = when (health) {
       BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
       BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
@@ -471,71 +568,70 @@ class MainActivity : FlutterFragmentActivity() {
       BatteryManager.BATTERY_STATUS_DISCHARGING -> "Discharging"
       BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "Not Charging"
       BatteryManager.BATTERY_STATUS_FULL -> "Full"
-      BatteryManager.BATTERY_STATUS_UNKNOWN -> "Unknown"
       else -> "Unknown"
     }
     val pluggedStr = when (plugged) {
       BatteryManager.BATTERY_PLUGGED_AC -> "AC"
       BatteryManager.BATTERY_PLUGGED_USB -> "USB"
       BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
-      else -> "None"
+      0 -> "Unplugged"
+      else -> "Unknown"
     }
 
-    // Derived full capacity: counter * scale / level (most accurate on this device)
-    val derivedFull = if (chargeCounter != null && chargeCounter > 0 && scale > 0 && level > 0) {
-      (chargeCounter.toDouble() * scale / level).roundToLong()
-    } else null
+    // Remaining charge, µAh -> mAh.
+    val counterUah = try {
+      bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+    } catch (_: Exception) { 0 }
+    val chargeCounterMah = if (counterUah > 0) counterUah / 1000.0 else null
 
-    // Design capacity from BatteryManager (filtered >100 = mAh, else null)
-    val designCap = try {
-      val cap = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-      if (cap > 100) cap.toLong() * 1000 else null
-    } catch (_: Exception) { null }
+    // Full capacity the gauge has *learned*. Extrapolated from the remaining
+    // charge at the current level; equals charge_full when the cell is full.
+    val fullCapacityMah = if (chargeCounterMah != null && level > 0 && scale > 0) {
+      chargeCounterMah * scale / level
+    } else {
+      readSysfs("/sys/class/power_supply/battery/charge_full")?.let { it / 1000.0 }
+    }
 
-    // Sysfs fallback
-    val sysfsFull = readSysfs("/sys/class/power_supply/battery/charge_full")
+    val designMah = designCapacityMah()
+
+    // No wear percentage is reported. It would be fullCapacity/design, but on
+    // this device that is 2946/4500 = 65% for a cell with cycle_count = 1,
+    // Android's min/last/max "learned" capacities all identical, and 0 mAh of
+    // measured discharge — i.e. an uncalibrated gauge reading, not wear.
+    // Telling wear from miscalibration needs cycle_count or the learned
+    // history, and both are out of reach for an app: sysfs is blocked by
+    // SELinux and batterystats needs the DUMP permission. Showing a confident
+    // "65% health" from data that cannot support it is worse than showing
+    // nothing.
 
     return mapOf(
-      "level" to level.toLong(),
-      "scale" to scale.toLong(),
-      "health" to healthStr,
+      "levelPercent" to (if (level >= 0 && scale > 0) level * 100 / scale else null)?.toLong(),
       "status" to statusStr,
-      "technology" to (technology ?: "Unknown"),
-      "temperatureC" to (temperature.toDouble() / 10.0),
-      "voltageV" to (voltage.toDouble() / 1000.0),
+      "health" to healthStr,
       "plugged" to pluggedStr,
-      "capacityPercent" to capacity.toLong(),
-      "chargeCounterUah" to chargeCounter?.toLong(),
-      "currentNowUa" to currentNow?.toLong(),
-      "fullCapacityUah" to (derivedFull ?: sysfsFull),
-      "designCapacityUah" to designCap,
-      "sysfsFullUah" to sysfsFull,
+      "technology" to (technology ?: "Unknown"),
+      "temperatureC" to (if (temperature > 0) temperature / 10.0 else null),
+      "voltageV" to (if (voltageMv > 0) voltageMv / 1000.0 else null),
+      "designCapacityMah" to designMah,
+      // Labelled as the gauge's own figure, not as the battery's capacity:
+      // it disagrees with the design capacity and cannot be trusted here.
+      "gaugeReportedMah" to fullCapacityMah,
+      "chargeCounterMah" to chargeCounterMah,
+      "cycleCount" to readSysfs("/sys/class/power_supply/battery/cycle_count"),
     )
   }
 
   private fun getStorageInfoBlock(): Map<String, Any?> {
-    val internalPath = filesDir.absolutePath
-    val internalStat = StatFs(internalPath)
-    val internalTotal = internalStat.blockCountLong * internalStat.blockSizeLong
-    val internalFree = internalStat.availableBlocksLong * internalStat.blockSizeLong
-    val internalUsed = internalTotal - internalFree
-    val externalPath = externalCacheDir?.absolutePath ?: ""
-    var externalTotal = 0L
-    var externalFree = 0L
-    var externalUsed = 0L
-    if (externalPath.isNotEmpty()) {
-      val stat = StatFs(externalPath)
-      externalTotal = stat.blockCountLong * stat.blockSizeLong
-      externalFree = stat.availableBlocksLong * stat.blockSizeLong
-      externalUsed = externalTotal - externalFree
-    }
+    // `filesDir` and `externalCacheDir` sit on the same physical volume on
+    // modern Android (the latter is a FUSE view of the former), so reporting
+    // both as "internal" and "external" double-counted one disk.
+    val stat = StatFs(filesDir.absolutePath)
+    val total = stat.blockCountLong * stat.blockSizeLong
+    val free = stat.availableBlocksLong * stat.blockSizeLong
     return mapOf(
-      "internalTotalBytes" to internalTotal.toLong(),
-      "internalFreeBytes" to internalFree.toLong(),
-      "internalUsedBytes" to internalUsed.toLong(),
-      "externalTotalBytes" to externalTotal.toLong(),
-      "externalFreeBytes" to externalFree.toLong(),
-      "externalUsedBytes" to externalUsed.toLong(),
+      "totalBytes" to total,
+      "freeBytes" to free,
+      "usedBytes" to (total - free),
     )
   }
 
@@ -571,66 +667,84 @@ class MainActivity : FlutterFragmentActivity() {
 
   private fun getCpuInfoBlock(): Map<String, Any?> {
     val cores = Runtime.getRuntime().availableProcessors()
-    var cpuInfo = ""
-    var maxFreq = 0L
-    var minFreq = 0L
-    try {
-      val reader = BufferedReader(FileReader("/proc/cpuinfo"))
-      cpuInfo = reader.readText()
-      reader.close()
-      val freqDir = java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/")
-      if (freqDir.exists()) {
-        maxFreq = java.io.File(freqDir, "cpuinfo_max_freq").readText().trim().toLongOrNull() ?: 0L
-        minFreq = java.io.File(freqDir, "cpuinfo_min_freq").readText().trim().toLongOrNull() ?: 0L
-      }
-    } catch (_: Exception) {}
-    val modelName = cpuInfo.split("\n").firstOrNull { it.startsWith("model name") || it.startsWith("Hardware") }
-      ?.split(":")?.getOrNull(1)?.trim() ?: Build.HARDWARE
+
+    // Frequency must be scanned across every core. Reading only cpu0 reported
+    // 2.0 GHz on this 4x A55 + 4x A78 SoC and hid the 2.5 GHz big cluster.
+    var maxKhz = 0L
+    var minKhz = Long.MAX_VALUE
+    for (i in 0 until cores) {
+      val dir = java.io.File("/sys/devices/system/cpu/cpu$i/cpufreq")
+      val mx = readSysfs("${dir.path}/cpuinfo_max_freq")
+      val mn = readSysfs("${dir.path}/cpuinfo_min_freq")
+      if (mx != null && mx > maxKhz) maxKhz = mx
+      if (mn != null && mn < minKhz) minKhz = mn
+    }
+    if (minKhz == Long.MAX_VALUE) minKhz = 0L
+
+    // Group cores by their reported max frequency to describe the clusters,
+    // e.g. "4x 2.50 GHz + 4x 2.00 GHz".
+    val byFreq = sortedMapOf<Long, Int>(compareByDescending { it })
+    for (i in 0 until cores) {
+      val mx = readSysfs("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq") ?: continue
+      byFreq[mx] = (byFreq[mx] ?: 0) + 1
+    }
+    val clusters = byFreq.entries.joinToString(" + ") { (khz, n) ->
+      "${n}x %.2f GHz".format(khz / 1_000_000.0)
+    }
+
+    // ARM64 /proc/cpuinfo has no "model name" or "Hardware" line, so the SoC
+    // name has to come from the build properties.
+    val socModel = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      Build.SOC_MODEL
+    } else {
+      Build.HARDWARE
+    }
+    val socVendor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+      Build.SOC_MANUFACTURER
+    } else {
+      ""
+    }
+
     return mapOf(
+      "socModel" to socModel,
+      "socManufacturer" to socVendor,
       "cores" to cores.toLong(),
-      "model" to modelName,
-      "maxFreqKHz" to maxFreq.toLong(),
-      "minFreqKHz" to minFreq.toLong(),
-      "abi" to Build.SUPPORTED_ABIS.joinToString(","),
+      "clusters" to clusters,
+      "maxFreqKhz" to maxKhz,
+      "minFreqKhz" to minKhz,
+      "abi" to Build.SUPPORTED_ABIS.joinToString(", "),
     )
   }
 
   private fun getNetworkInfoBlock(): Map<String, Any?> {
-    val interfaces = mutableListOf<Map<String, Any?>>()
+    // Flattened to "iface -> address" pairs: the previous nested list of maps
+    // was rendered with toString() and came out as an unreadable dump.
+    // Loopback, down and virtual (dummy*) interfaces are dropped, and MAC is
+    // omitted because Android returns a fixed 02:00:00:00:00:00 to apps.
+    val out = linkedMapOf<String, Any?>()
     try {
-      val enumeration = NetworkInterface.getNetworkInterfaces()
-      Collections.list(enumeration).forEach { ni ->
-        if (!ni.isUp || ni.isLoopback) return@forEach
-        val hwAddr = ni.hardwareAddress?.joinToString(":") { "%02X".format(it) }
-        val ipv4 = ni.interfaceAddresses.firstOrNull { it.address.hostAddress.contains(".") }?.address?.hostAddress
-        val ipv6 = ni.interfaceAddresses.firstOrNull { it.address.hostAddress.contains(":") && !it.address.isLoopbackAddress }?.address?.hostAddress
-        if (hwAddr != null || ipv4 != null || ipv6 != null) {
-          interfaces.add(mapOf(
-            "name" to ni.name,
-            "displayName" to ni.displayName,
-            "mac" to hwAddr,
-            "ipv4" to ipv4,
-            "ipv6" to ipv6,
-            "mtu" to ni.mtu.toLong(),
-          ))
-        }
+      Collections.list(NetworkInterface.getNetworkInterfaces()).forEach { ni ->
+        if (!ni.isUp || ni.isLoopback || ni.name.startsWith("dummy")) return@forEach
+        val v4 = ni.interfaceAddresses
+          .mapNotNull { it.address.hostAddress }
+          .firstOrNull { it.contains(".") }
+        val v6 = ni.interfaceAddresses
+          .mapNotNull { it.address.hostAddress }
+          .firstOrNull { it.contains(":") && !it.startsWith("fe80") }
+        if (v4 != null) out[ni.name] = v4
+        if (v6 != null) out["${ni.name} (IPv6)"] = v6.substringBefore('%')
       }
-    } catch (_: Exception) {}
-    val telephony = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-    val simInfo = if (telephony != null && checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
-      mapOf(
-        "operator" to telephony.networkOperatorName,
-        "operatorNumeric" to telephony.networkOperator,
-        "simOperator" to telephony.simOperatorName,
-        "phoneType" to telephony.phoneType.toLong(),
-        "networkType" to telephony.networkType.toLong(),
-      )
-    } else {
-      mapOf("note" to "READ_PHONE_STATE permission not granted")
+    } catch (_: Exception) {
+      // leave whatever was collected
     }
-    return mapOf(
-      "interfaces" to interfaces,
-      "telephony" to simInfo,
-    )
+
+    val telephony = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+    if (telephony != null &&
+        checkSelfPermission(android.Manifest.permission.READ_PHONE_STATE) ==
+            PackageManager.PERMISSION_GRANTED) {
+      val operator = telephony.networkOperatorName
+      if (!operator.isNullOrBlank()) out["operator"] = operator
+    }
+    return out
   }
 }

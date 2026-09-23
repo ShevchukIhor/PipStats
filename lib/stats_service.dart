@@ -104,6 +104,77 @@ class StatsService {
     }
   }
 
+  /// Whether our notifications can be shown.
+  ///
+  /// The monitoring notification is the user's only signal that collection is
+  /// running; on Android 13+ it is suppressed until POST_NOTIFICATIONS is
+  /// granted, and the service gives no hint that this happened.
+  static Future<bool> areNotificationsEnabled() async {
+    try {
+      final v = await _channel.invokeMethod<bool>('areNotificationsEnabled');
+      return v ?? false;
+    } catch (e) {
+      log('areNotificationsEnabled error: $e');
+      return false;
+    }
+  }
+
+  /// Show the system notification-permission prompt.
+  static Future<void> requestNotificationPermission() async {
+    try {
+      await _channel.invokeMethod('requestNotificationPermission');
+    } catch (e) {
+      log('requestNotificationPermission error: $e');
+    }
+  }
+
+  /// Whether the system has exempted the app from battery optimisation.
+  ///
+  /// Without the exemption OEM power management — MediaTek's in particular —
+  /// kills the collector after a while, which shows up as gaps in the history
+  /// rather than as an obvious failure.
+  static Future<bool> isIgnoringBatteryOptimizations() async {
+    try {
+      final v = await _channel.invokeMethod<bool>(
+        'isIgnoringBatteryOptimizations',
+      );
+      return v ?? false;
+    } catch (e) {
+      log('isIgnoringBatteryOptimizations error: $e');
+      return false;
+    }
+  }
+
+  /// Show the system dialog asking for that exemption. The user decides; the
+  /// result is only observable by polling [isIgnoringBatteryOptimizations].
+  static Future<void> requestIgnoreBatteryOptimizations() async {
+    try {
+      await _channel.invokeMethod('requestIgnoreBatteryOptimizations');
+    } catch (e) {
+      log('requestIgnoreBatteryOptimizations error: $e');
+    }
+  }
+
+  /// Whether the monitoring foreground service is live.
+  static Future<bool> isServiceRunning() async {
+    try {
+      final v = await _channel.invokeMethod<bool>('isServiceRunning');
+      return v ?? false;
+    } catch (e) {
+      log('isServiceRunning error: $e');
+      return false;
+    }
+  }
+
+  /// (Re)start the monitoring foreground service.
+  static Future<void> startForegroundService() async {
+    try {
+      await _channel.invokeMethod('startForegroundService');
+    } catch (e) {
+      log('startForegroundService error: $e');
+    }
+  }
+
   /// Schedule the recurring background collector (AlarmManager).
   static Future<void> scheduleSync() async {
     try {

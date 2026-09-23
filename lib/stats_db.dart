@@ -500,10 +500,13 @@ class StatsDb {
       orderBy: 'ts ASC',
     );
     final openSessions = await _openSessionsAt(d, periodStartMs);
+    // Count a still-open session up to now, not merely up to the last stored
+    // event: with no new events for an hour that hour was silently dropped.
     final base = aggregateUsage(
       events,
       openSessions: openSessions,
       windowStart: periodStartMs,
+      observationEnd: DateTime.now().millisecondsSinceEpoch,
     );
 
     // Events only cover from the earliest stored event onward. For any part of
@@ -547,11 +550,19 @@ class StatsDb {
   /// Uses the max row id per package (id is monotonic with ts) so only the
   /// latest pre-window event of each package is loaded, not the whole history.
   Future<Map<String, int>> _openSessionsAt(Database d, int ts) async {
+    // Pick each package's latest pre-window event by **timestamp**, using id
+    // only to break ties. Ordering by MAX(id) was wrong: StatsService.sync
+    // re-reads a 5-minute overlap window, so a late-delivered event can be
+    // inserted with a higher id but an older ts and would win incorrectly,
+    // flipping a session's open/closed state at the window boundary.
     final rows = await d.rawQuery(
-      'SELECT package, event_type, ts FROM app_events '
-      'WHERE id IN (SELECT MAX(id) FROM app_events '
-      '  WHERE ts < ? GROUP BY package)',
-      [ts],
+      'SELECT e.package, e.event_type, e.ts FROM app_events e '
+      'JOIN (SELECT package, MAX(ts) AS mts FROM app_events '
+      '      WHERE ts < ? GROUP BY package) m '
+      '  ON e.package = m.package AND e.ts = m.mts '
+      'WHERE e.ts < ? '
+      'GROUP BY e.package HAVING e.id = MAX(e.id)',
+      [ts, ts],
     );
     final open = <String, int>{};
     for (final e in rows) {
@@ -649,6 +660,7 @@ List<Map<String, Object?>> aggregateUsage(
   List<Map<String, Object?>> events, {
   Map<String, int>? openSessions,
   int? windowStart,
+  int? observationEnd,
 }) {
   final Map<String, int> fgMs = {};
   final Map<String, int> launches = {};
@@ -683,6 +695,16 @@ List<Map<String, Object?>> aggregateUsage(
       if (start != null && ts > start) {
         fgMs[pkg] = (fgMs[pkg] ?? 0) + (ts - clamp(start));
       }
+    }
+  }
+
+  // Count remaining ongoing sessions up to the end of observations.
+  final end = observationEnd ?? (events.isEmpty ? 0 : events.last['ts'] as int);
+  for (final entry in openSince.entries) {
+    final pkg = entry.key;
+    final start = entry.value;
+    if (end > clamp(start)) {
+      fgMs[pkg] = (fgMs[pkg] ?? 0) + (end - clamp(start));
     }
   }
 
