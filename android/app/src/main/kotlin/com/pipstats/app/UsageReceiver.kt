@@ -1,5 +1,7 @@
 package com.pipstats.app
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.BroadcastReceiver
@@ -68,5 +70,37 @@ class UsageReceiver : BroadcastReceiver() {
   companion object {
     const val ACTION_SYNC = "com.pipstats.app.ACTION_SYNC"
     private const val OVERLAP_MS = 5 * 60 * 1000L
+
+    /** How often the collector wakes up. */
+    private const val INTERVAL_MS = 15 * 60 * 1000L
+
+    /**
+     * Arm the repeating collection alarm.
+     *
+     * Lives here rather than in MainActivity because BootReceiver needs it
+     * too: after a reboot there is no activity to schedule it from, and the
+     * alarm was previously re-armed only when the user opened the app.
+     *
+     * Inexact on purpose — the collector reads a 5-minute overlap window, so
+     * drift costs nothing and the system can batch the wake-up.
+     */
+    fun schedule(context: Context) {
+      val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+      val intent = Intent(context, UsageReceiver::class.java).apply {
+        action = ACTION_SYNC
+      }
+      val pi = PendingIntent.getBroadcast(
+        context,
+        0,
+        intent,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+      am.setInexactRepeating(
+        AlarmManager.RTC_WAKEUP,
+        System.currentTimeMillis() + INTERVAL_MS,
+        INTERVAL_MS,
+        pi,
+      )
+    }
   }
 }
