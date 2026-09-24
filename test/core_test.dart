@@ -186,6 +186,280 @@ void main() {
     });
   });
 
+  group('RevokeService.buildRevokeAllMessage', () {
+    const owner = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const a1 = '5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm';
+    const a2 = 'So11111111111111111111111111111111111111112';
+    const blockhash = 'EETubP5AKHgjPAhzPAFcb8BAY1hMH639CWCFTqi3hq1k';
+
+    test('emits transaction wire format', () {
+      final bytes = RevokeService.buildRevokeAllMessage(
+        ownerAddress: owner,
+        tokenAccounts: [a1, a2],
+        blockhash: blockhash,
+      );
+      expect(bytes.first, 1, reason: 'the owner is the only signer');
+      expect(bytes.sublist(1, 65), everyElement(0));
+      expect(bytes.sublist(65).first, 1);
+    });
+
+    test('more accounts means a longer transaction', () {
+      List<int> build(List<String> accs) =>
+          RevokeService.buildRevokeAllMessage(
+            ownerAddress: owner,
+            tokenAccounts: accs,
+            blockhash: blockhash,
+          );
+      expect(build([a1, a2]).length, greaterThan(build([a1]).length));
+    });
+
+    test('refuses an empty list instead of sending a no-op', () {
+      expect(
+        () => RevokeService.buildRevokeAllMessage(
+          ownerAddress: owner,
+          tokenAccounts: const [],
+          blockhash: blockhash,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('a batch stays under the 1232-byte packet limit', () {
+      // The real constraint is the packet size, not the instruction count.
+      final bytes = RevokeService.buildRevokeAllMessage(
+        ownerAddress: owner,
+        tokenAccounts: List.filled(
+          RevokeService.maxRevokesPerTransaction,
+          a1,
+        ),
+        blockhash: blockhash,
+      );
+      expect(bytes.length, lessThan(1232));
+    });
+  });
+
+  group('RevokeService.chunkAccounts', () {
+    test('splits at the batch size', () {
+      final accounts = List.generate(23, (i) => 'acct$i');
+      final chunks = RevokeService.chunkAccounts(accounts);
+      expect(chunks, hasLength(3));
+      expect(chunks[0], hasLength(10));
+      expect(chunks[2], hasLength(3));
+      expect(chunks.expand((c) => c).toList(), accounts);
+    });
+
+    test('a short list is one chunk, an empty list is none', () {
+      expect(RevokeService.chunkAccounts(['a']), hasLength(1));
+      expect(RevokeService.chunkAccounts([]), isEmpty);
+    });
+  });
+
+  group('formatBytes', () {
+    test('uses SI units, matching carriers and Android settings', () {
+      // 1000, not 1024: a user comparing this against their data plan or the
+      // system settings screen would otherwise see a different number.
+      expect(formatBytes(999), '999 B');
+      expect(formatBytes(1000), '1.0 kB');
+      expect(formatBytes(1500000), '1.5 MB');
+      expect(formatBytes(2000000000), '2.0 GB');
+    });
+
+    test('drops the decimal once it stops carrying information', () {
+      expect(formatBytes(150000000), '150 MB');
+    });
+
+    test('handles zero', () {
+      expect(formatBytes(0), '0 B');
+    });
+  });
+
+  group('filterRows', () {
+    final rows = <Map<String, Object?>>[
+      {'package': 'com.pipstats.app', 'label': 'PipStats'},
+      {'package': 'ag.jup.jupiter.android', 'label': 'Jupiter'},
+      {'package': 'com.android.settings', 'label': 'Settings'},
+    ];
+
+    test('an empty query returns the list untouched', () {
+      expect(filterRows(rows, ''), same(rows));
+      expect(filterRows(rows, '   '), same(rows));
+    });
+
+    test('matches the label, ignoring case', () {
+      expect(filterRows(rows, 'jUpI').single['label'], 'Jupiter');
+    });
+
+    test('matches the package too', () {
+      // Clones and work-profile copies share a display name; the package id is
+      // the only thing that tells them apart.
+      expect(filterRows(rows, 'ag.jup').single['label'], 'Jupiter');
+      expect(filterRows(rows, 'com.').length, 2);
+    });
+
+    test('no match yields an empty list, not everything', () {
+      expect(filterRows(rows, 'zzz'), isEmpty);
+    });
+  });
+
+  group('CSV export', () {
+    test('quotes fields that would break the row', () {
+      // App labels routinely contain commas; an unescaped one silently shifts
+      // every later column, which is worse than a visibly broken file.
+      expect(csvField('Maps, Navigate & Explore'), '"Maps, Navigate & Explore"');
+      expect(csvField('say "hi"'), '"say ""hi"""');
+      expect(csvField('two\nlines'), '"two\nlines"');
+    });
+
+    test('leaves ordinary fields alone', () {
+      expect(csvField('com.pipstats.app'), 'com.pipstats.app');
+      expect(csvField(1234), '1234');
+      expect(csvField(null), '');
+    });
+
+    test('builds a header and one row per entry', () {
+      final out = buildCsv(
+        ['package', 'label'],
+        [
+          ['a', 'App A'],
+          ['b', 'B, Inc'],
+        ],
+      );
+      final lines = out.trim().split('\n');
+      expect(lines, hasLength(3));
+      expect(lines.first, 'package,label');
+      expect(lines.last, 'b,"B, Inc"');
+    });
+  });
+
+  group('drainBetween', () {
+    Map<String, Object?> s(int ts, int counter, {bool charging = false}) => {
+      'ts': ts,
+      'counter_uah': counter,
+      'charging': charging ? 1 : 0,
+    };
+
+    test('sums the drops between consecutive samples', () {
+      expect(
+        drainBetween([s(1, 3000000), s(2, 2900000), s(3, 2750000)]),
+        250000,
+      );
+    });
+
+    test('a charge in the middle does not cancel earlier drain', () {
+      // First-minus-last would report 0 here and hide 200000 µAh of real use.
+      final out = drainBetween([
+        s(1, 3000000),
+        s(2, 2800000),
+        s(3, 3000000),
+      ]);
+      expect(out, 200000);
+    });
+
+    test('ignores pairs recorded on charger', () {
+      expect(
+        drainBetween([
+          s(1, 3000000, charging: true),
+          s(2, 2500000, charging: true),
+          s(3, 2400000),
+        ]),
+        isNot(500000),
+        reason: 'a counter falling while plugged in is not app consumption',
+      );
+    });
+
+    test('says it does not know rather than reporting zero', () {
+      expect(drainBetween([]), -1);
+      expect(drainBetween([s(1, 3000000)]), -1, reason: 'one sample');
+      expect(
+        drainBetween([s(1, 3000000, charging: true), s(2, 2900000, charging: true)]),
+        -1,
+        reason: 'every pair was on charger, so nothing was measured',
+      );
+    });
+
+    test('a flat counter is a real zero, not unknown', () {
+      expect(drainBetween([s(1, 3000000), s(2, 3000000)]), 0);
+    });
+
+    test('skips samples with no counter reading', () {
+      expect(drainBetween([s(1, 0), s(2, 0)]), -1);
+    });
+  });
+
+  group('approval alarm condition', () {
+    TokenAccountInfo acct({String? delegate}) => TokenAccountInfo(
+      mint: 'm',
+      owner: 'o',
+      amount: 1,
+      delegate: delegate,
+      state: 1,
+      delegatedAmount: delegate == null ? 0 : 5,
+      closeAuthority: null,
+      isNative: false,
+      nativeAmount: 0,
+    );
+
+    test('accounts without delegates are not approvals', () {
+      // Holding token accounts is not the same as having granted anything;
+      // this distinction was already got wrong once in the vault list.
+      expect(delegatedAccounts([acct(), acct()]), isEmpty);
+      expect(shouldWarnAboutApprovals('wallet', [acct(), acct()]), isFalse);
+    });
+
+    test('warns when any account has a delegate', () {
+      final accounts = [acct(), acct(delegate: 'spender')];
+      expect(delegatedAccounts(accounts), hasLength(1));
+      expect(shouldWarnAboutApprovals('wallet', accounts), isTrue);
+    });
+
+    test('stays silent with no wallet connected', () {
+      // No address means the scan never ran; an empty result is "unknown",
+      // not "safe", and a warning either way would be noise.
+      expect(shouldWarnAboutApprovals(null, [acct(delegate: 'x')]), isFalse);
+    });
+
+    test('stays silent with nothing scanned', () {
+      expect(shouldWarnAboutApprovals('wallet', const []), isFalse);
+    });
+  });
+
+  group('chargeAtLevel', () {
+    // 4500 mAh design capacity, as read from power_profile.xml on the Seeker.
+    const cap = 4500000;
+
+    test('scales the trusted capacity by the level', () {
+      expect(chargeAtLevel(cap, 100, 100), 4500000);
+      expect(chargeAtLevel(cap, 67, 100), 3015000);
+      expect(chargeAtLevel(cap, 43, 100), 1935000);
+      expect(chargeAtLevel(cap, 0, 100), 0);
+    });
+
+    test('honours a scale other than 100', () {
+      // level is a fraction of scale, not a percentage: 50 of 200 is a quarter.
+      expect(chargeAtLevel(cap, 50, 200), 1125000);
+      expect(chargeAtLevel(cap, 100, 200), 2250000);
+      expect(chargeAtLevel(cap, 200, 200), 4500000);
+    });
+
+    test('never exceeds the capacity', () {
+      // A level above scale is nonsense but has been seen from OEM drivers;
+      // reporting more charge than the battery holds is worse than clamping.
+      expect(chargeAtLevel(cap, 150, 100), cap);
+    });
+
+    test('refuses rather than inventing a number', () {
+      expect(chargeAtLevel(-1, 50, 100), -1, reason: 'no capacity to scale');
+      expect(chargeAtLevel(cap, 50, 0), -1, reason: 'scale of zero');
+      expect(chargeAtLevel(cap, -1, 100), -1, reason: 'level unknown');
+    });
+
+    test('is exact at the levels the UI renders', () {
+      // The strip divides by 1000 and rounds; these must not drift by an mAh.
+      expect((chargeAtLevel(cap, 43, 100) / 1000).round(), 1935);
+      expect((chargeAtLevel(cap, 12, 100) / 1000).round(), 540);
+    });
+  });
+
   group('aggregateUsage', () {
     Map<String, Object?> ev(String pkg, int type, int ts) => {
       'package': pkg,

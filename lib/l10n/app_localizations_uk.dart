@@ -13,7 +13,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get appTitle => 'PIPSTATS';
 
   @override
-  String get headerTitle => 'PIPSTATS  ЛОКАЛЬНІ  СТАТИСТИКИ';
+  String get headerTitle => 'PIPSTATS';
 
   @override
   String get systemTab => 'СИСТЕМА';
@@ -483,4 +483,94 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get monitoringEnableNotif => 'УВІМКНУТИ';
+
+  @override
+  String get appCharging => 'ЗАРЯДЖАЄТЬСЯ';
+
+  @override
+  String appScreenShare(String pct) {
+    return '$pct% ЕКРАНУ';
+  }
+
+  @override
+  String appDrainEstimate(String mah) {
+    return '~$mah mAh';
+  }
+
+  @override
+  String get appDrainMeasuring => 'ВИМІРЮВАННЯ';
+
+  @override
+  String periodDrainTotal(String mah) {
+    return 'РОЗРЯДЖЕНО ЗА ПЕРІОД: $mah mAh';
+  }
+
+  @override
+  String exportDone(String name) {
+    return 'Збережено в Downloads: $name';
+  }
+
+  @override
+  String get exportFailed => 'Експорт не вдався';
+
+  @override
+  String get exportNothing => 'Нема чого експортувати';
+
+  @override
+  String get searchHint => 'ФІЛЬТР ЗАСТОСУНКІВ';
+
+  @override
+  String get searchNoMatch => 'НЕМАЄ ЗБІГІВ';
+
+  @override
+  String get batteryChartTitle => 'БАТАРЕЯ';
+
+  @override
+  String get batteryChartEmpty => 'ЗБИРАЄМО ЗАМІРИ';
+
+  @override
+  String netUsage(String down, String up) {
+    return '$down вх · $up вих';
+  }
+
+  @override
+  String revokeAll(int count) {
+    return 'ВІДКЛИКАТИ ВСІ ($count)';
+  }
+
+  @override
+  String revokeAllConfirm(int count, int txs) {
+    return 'Відкликати делегата на всіх $count токен-акаунтах? Це надсилається як $txs транзакцій, і кожну треба підтвердити в гаманці.';
+  }
+
+  @override
+  String revokeAllDone(int count) {
+    return 'Відкликано дозволів: $count';
+  }
+
+  @override
+  String get batteryChartFlat => 'БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ';
+
+  @override
+  String get approvalAlarmTitle => '! ДОЗВОЛИ НА ВИТРАТУ ТОКЕНІВ';
+
+  @override
+  String approvalAlarmBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString токен-акаунтів мають активних делегатів',
+      few: '$countString токен-акаунти мають активних делегатів',
+      one: '1 токен-акаунт має активного делегата',
+    );
+    return '$_temp0, який може переміщати ці токени без повторного запиту.';
+  }
+
+  @override
+  String get approvalAlarmAction => 'ПЕРЕГЛЯНУТИ';
 }

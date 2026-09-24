@@ -13,6 +13,7 @@ import 'domains.dart';
 import 'wallet_auth.dart';
 import 'revoke.dart';
 import 'theme.dart';
+import 'widgets/battery_chart.dart';
 import 'widgets/boot_sequence.dart';
 import 'widgets/crt_overlay.dart';
 import 'l10n/app_localizations.dart';
@@ -127,6 +128,123 @@ enum Period { day, week, month, all }
 
 enum SortKey { time, launches }
 
+/// Formats a byte count for display.
+///
+/// Uses SI units, matching how carriers and Android settings report data, so
+/// the number lines up with what the user sees elsewhere.
+String formatBytes(int bytes) {
+  if (bytes < 1000) return '$bytes B';
+  const units = ['kB', 'MB', 'GB', 'TB'];
+  var value = bytes / 1000;
+  var unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+}
+
+/// Rows whose label or package matches [query], case-insensitively.
+///
+/// Matches the package name as well as the label so a user can find an app by
+/// its id when two apps share a display name, which happens with clones and
+/// work-profile copies.
+List<Map<String, Object?>> filterRows(
+  List<Map<String, Object?>> rows,
+  String query,
+) {
+  final q = query.trim().toLowerCase();
+  if (q.isEmpty) return rows;
+  return rows.where((r) {
+    final label = (r['label'] as String? ?? '').toLowerCase();
+    final pkg = (r['package'] as String? ?? '').toLowerCase();
+    return label.contains(q) || pkg.contains(q);
+  }).toList();
+}
+
+/// Escapes one CSV field.
+///
+/// Quotes whenever the value contains a comma, quote, or newline, and doubles
+/// embedded quotes — app labels routinely contain commas, and an unescaped one
+/// silently shifts every later column in the row.
+String csvField(Object? value) {
+  final s = value?.toString() ?? '';
+  if (!s.contains(RegExp(r'[",\n\r]'))) return s;
+  return '"${s.replaceAll('"', '""')}"';
+}
+
+/// Builds a CSV from [header] and [rows].
+String buildCsv(List<String> header, List<List<Object?>> rows) {
+  final buffer = StringBuffer()..writeln(header.map(csvField).join(','));
+  for (final row in rows) {
+    buffer.writeln(row.map(csvField).join(','));
+  }
+  return buffer.toString();
+}
+
+/// Token accounts that currently have a delegate set.
+///
+/// Having token accounts is not the same as having approvals: this exact
+/// distinction was already got wrong once here, where a wallet with accounts
+/// but no delegates rendered an empty list instead of saying there were none.
+List<TokenAccountInfo> delegatedAccounts(List<TokenAccountInfo> accounts) =>
+    accounts.where((a) => a.hasDelegate).toList();
+
+/// Whether the home screen should warn about live token approvals.
+///
+/// Requires a connected wallet: with no address the scan never ran, and an
+/// empty result means "unknown", not "safe".
+bool shouldWarnAboutApprovals(
+  String? walletAddress,
+  List<TokenAccountInfo> accounts,
+) =>
+    walletAddress != null && delegatedAccounts(accounts).isNotEmpty;
+
+/// Charge discharged across [samples], in µAh.
+///
+/// Sums only the drops between consecutive samples. A plain first-minus-last
+/// would be wrong whenever the phone charged during the period: the counter
+/// climbs back up and cancels out real earlier drain. Pairs where either
+/// sample was taken on charger are skipped for the same reason.
+///
+/// Returns -1 when there is not enough history to measure anything, so the UI
+/// can say so instead of showing a confident 0.
+int drainBetween(List<Map<String, Object?>> samples) {
+  if (samples.length < 2) return -1;
+  var total = 0;
+  var pairs = 0;
+  for (var i = 1; i < samples.length; i++) {
+    final prev = samples[i - 1];
+    final cur = samples[i];
+    if ((cur['charging'] as int? ?? 0) == 1 ||
+        (prev['charging'] as int? ?? 0) == 1) {
+      continue;
+    }
+    final a = prev['counter_uah'] as int? ?? 0;
+    final b = cur['counter_uah'] as int? ?? 0;
+    if (a <= 0 || b <= 0) continue;
+    pairs++;
+    if (a > b) total += a - b;
+  }
+  if (pairs == 0) return -1;
+  return total;
+}
+
+/// Charge held in the battery, in µAh, at [level] out of [scale].
+///
+/// Returns -1 when the inputs cannot support an answer, so callers can fall
+/// back rather than render a confident wrong number.
+///
+/// [capacityUah] is the capacity to scale against — design capacity here, not
+/// the fuel gauge's own full reading. Kept pure and separate because every
+/// battery defect in this file so far has been a unit or scale mistake that
+/// looked right in the source.
+int chargeAtLevel(int capacityUah, int level, int scale) {
+  if (capacityUah <= 0 || level < 0 || scale <= 0) return -1;
+  if (level > scale) return capacityUah;
+  return (capacityUah * level / scale).round();
+}
+
 /// Pure comparator for usage rows: orders by foreground time or launches,
 /// ascending or descending. Extracted for testability.
 int compareUsageRows(
@@ -164,6 +282,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   int _batteryLevel = -1;
   bool _charging = false;
+  /// Charge currently in the battery, µAh. Recomputed on every sample so the
+  /// metrics strip tracks the level instead of showing a fixed number.
+  int _currentChargeUah = -1;
+
   int _capacityUah = -1;
   int _realCapacityUah = -1;
   int _designCapacityUah = -1;
@@ -172,12 +294,28 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _batteryInfoAvailable = false;
   String _uptime = '';
   List<Map<String, Object?>> _rows = [];
+
+  /// Live filter over [_rows]. Kept out of the query so typing never hits the
+  /// database or disturbs the totals the percentages are computed against.
+  String _appQuery = '';
+
+  /// Samples backing the battery chart, for the period on screen.
+  List<BatteryPoint> _batteryPoints = const [];
+
+  /// Whether the battery section is expanded. Remembered like the other view
+  /// preferences, so a collapsed chart stays collapsed across restarts.
+  bool _batteryExpanded = true;
+  final _searchController = TextEditingController();
+
+  /// [_rows] narrowed by [_appQuery].
+  List<Map<String, Object?>> get _visibleRows => filterRows(_rows, _appQuery);
   bool _hasAccess = false;
   bool _syncing = false;
   bool _shortHistory = false;
   int _totalFgMs = 0;
-  int _totalDrainUah = -1;
-  int _prevChargeCounterUah = -1;
+  /// Discharge measured across the displayed period, µAh; -1 when there is
+  /// not enough sample history yet to say.
+  int _periodDrainUah = -1;
   final Map<String, String> _iconCache = {};
   final Map<String, String> _appLabels = {};
   SortKey _sortKey = SortKey.time;
@@ -189,6 +327,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // Vault / on-chain state
   int _tab = 0; // 0 = SYSTEM, 1 = VAULT, 2 = SYSINFO, 3 = INFO
   int _vaultSection = 0; // 0 = tokens, 1 = nfts, 2 = tx, 3 = delegations
+
+  /// Briefly true after the home-screen alarm navigates here, to show where
+  /// the jump landed.
+  bool _highlightDelegTab = false;
   Future<Map?>? _deviceInfoFuture;
   final TextEditingController _addressController = TextEditingController();
   String? _walletAddress;
@@ -247,6 +389,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _addressController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -281,6 +424,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final calibrated = await StatsDb.instance.getMeta('battery_calibrated_capacity_uah');
     if (calibrated != null) {
       _calibratedCapacityUah = int.tryParse(calibrated) ?? -1;
+    }
+    {
+      final v = await StatsDb.instance.getMeta('battery_chart_expanded');
+      if (v != null) _batteryExpanded = v == '1';
     }
     // Load vault data from database if wallet is connected.
     if (_walletAddress != null) {
@@ -341,6 +488,74 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _resetRefreshTimer();
     await _syncAndRefresh();
     if (mounted) setState(() {});
+  }
+
+  /// Pull-to-refresh for the tabs. Also re-checks monitoring health, since a
+  /// pull is exactly when someone is asking whether the data is current.
+  /// Writes the usage table for the current period to Downloads as CSV.
+  ///
+  /// Exports what is on screen, including the drain estimate, so a row in the
+  /// file can be traced back to a row in the app. Until this existed there was
+  /// no way to get the history out at all — reinstalling the app destroyed it,
+  /// which is how five days of it were lost during development.
+  Future<void> _exportUsage() async {
+    final l10n = AppLocalizations.of(context);
+    if (_rows.isEmpty) {
+      _toast(l10n.exportNothing);
+      return;
+    }
+    final csv = buildCsv(
+      const [
+        'package',
+        'label',
+        'foreground_ms',
+        'launches',
+        'screen_pct',
+        'drain_mah_estimate',
+        'rx_bytes',
+        'tx_bytes',
+      ],
+      _rows
+          .map(
+            (r) => [
+              r['package'],
+              r['label'],
+              r['fg_ms'],
+              r['launches'],
+              (r['screen_pct'] as num?)?.toStringAsFixed(2),
+              (r['drain_mah'] as num?)?.toStringAsFixed(1) ?? '',
+              r['rx_bytes'],
+              r['tx_bytes'],
+            ],
+          )
+          .toList(),
+    );
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 19)
+        .replaceAll(RegExp(r'[:T]'), '-');
+    final saved = await StatsService.exportToDownloads(
+      'pipstats-usage-$stamp.csv',
+      csv,
+    );
+    if (!mounted) return;
+    _toast(saved == null ? l10n.exportFailed : l10n.exportDone(saved));
+  }
+
+  void _toast(String message) {
+    final ds = context.ds;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: TextStyle(color: ds.bg)),
+        backgroundColor: ds.primary,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _pullRefresh() async {
+    await _manualRefresh();
+    await _refreshMonitoringHealth();
   }
 
   Future<void> _syncAndRefresh() async {
@@ -429,13 +644,44 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
 
       if (counter is int && counter > 0) {
-        if (_prevChargeCounterUah > 0) {
-          final delta = _prevChargeCounterUah - counter;
-          if (delta > 0) {
-            _totalDrainUah = delta;
-          }
-        }
-        _prevChargeCounterUah = counter;
+        // Persist the sample. StatsDb has carried this table and its queries
+        // from the start, but nothing ever wrote to it, so per-app drain had
+        // no measured discharge to work from.
+        final currentUa = info['currentNowUa'];
+        await StatsDb.instance.insertBatterySample(
+          DateTime.now().millisecondsSinceEpoch,
+          counter,
+          currentUa is int ? currentUa : 0,
+          _charging,
+        );
+      }
+
+      // Charge held right now, as a fraction of the capacity we trust.
+      //
+      // The fraction comes from level/scale rather than from the gauge's
+      // chargeCounter/chargeFull ratio: chargeFull is itself derived here as
+      // counter * scale / level, so that ratio reduces to the same number
+      // without adding precision.
+      //
+      // The absolute scale is the effective capacity (design, 4500 mAh on this
+      // device) rather than the gauge's own full reading, which reports 2946
+      // mAh for a cell with cycle_count 1 and no measured discharge.
+      // Level comes from _batteryLevel — the same value the CHARGE cell
+      // renders — so the two cells can never contradict each other. They are
+      // read through different paths (battery_plus vs the native battery
+      // intent) and were seen disagreeing outright under `dumpsys battery set
+      // level`: CHARGE said 100% while this showed 43% worth of mAh.
+      final charge = chargeAtLevel(
+        _effectiveCapacityUah,
+        _batteryLevel > 0
+            ? _batteryLevel
+            : (level is int && level > 0 ? level : -1),
+        scale is int && scale > 0 ? scale : 100,
+      );
+      if (charge > 0) {
+        _currentChargeUah = charge;
+      } else if (counter is int && counter > 0) {
+        _currentChargeUah = counter;
       }
 
       _batteryInfoAvailable = true;
@@ -535,16 +781,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     for (final r in appList) {
       _totalFgMs += (r['fg_ms'] as int?) ?? 0;
     }
-    final capacityForEstimate = _effectiveCapacityUah;
+    // Real discharge measured over the displayed period, apportioned by each
+    // app's share of foreground time.
+    //
+    // This used to be `effectiveCapacity * share`: an app with half the screen
+    // time was credited with half the battery's entire 4500 mAh, whatever the
+    // phone had actually discharged — often nothing at all. That number was
+    // unrelated to consumption by construction.
+    //
+    // It is still an estimate, and a crude one: Android exposes no per-app
+    // power attribution to ordinary apps (BatteryStats needs DUMP), so screen
+    // time is the only weighting available. What changed is that the total
+    // being divided up is now a measurement rather than a constant.
+    final samples = await StatsDb.instance.batterySamplesBetween(
+      _periodStartMs(),
+      DateTime.now().millisecondsSinceEpoch,
+    );
+    _periodDrainUah = drainBetween(samples);
+    _batteryPoints = BatteryPoint.fromRows(samples);
+
+    // Network bytes per package for the same window. Merged onto the rows so
+    // a single list answers both "how long" and "how much traffic".
+    final net = await StatsService.networkUsage(_periodStartMs());
+    final rx = <String, int>{};
+    final tx = <String, int>{};
+    for (final n in net) {
+      final pkg = n['package'] as String?;
+      if (pkg == null) continue;
+      rx[pkg] = (n['rx_bytes'] as num?)?.toInt() ?? 0;
+      tx[pkg] = (n['tx_bytes'] as num?)?.toInt() ?? 0;
+    }
+    for (final r in appList) {
+      final pkg = r['package'] as String;
+      r['rx_bytes'] = rx[pkg] ?? 0;
+      r['tx_bytes'] = tx[pkg] ?? 0;
+    }
     for (final r in appList) {
       final fg = (r['fg_ms'] as int?) ?? 0;
       final share = _totalFgMs > 0 ? fg / _totalFgMs : 0.0;
-      r['drain_pct'] = share * 100.0;
-      if (capacityForEstimate > 0) {
-        r['drain_mah'] = (capacityForEstimate * share) / 1000.0;
-      } else {
-        r['drain_mah'] = (_totalDrainUah * share) / 1000.0;
-      }
+      r['screen_pct'] = share * 100.0;
+      r['drain_mah'] = _periodDrainUah > 0
+          ? (_periodDrainUah * share) / 1000.0
+          : null;
     }
     var shortHistory = false;
     if (_period != Period.day && appList.isNotEmpty) {
@@ -668,48 +946,93 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               children: [
                 _header(),
                 _tabSwitch(),
-                if (_tab == 0) ...[
-                  _monitoringBanner(),
-                  _metricsRow(),
-                  _screenTimeBar(),
-                  SizedBox(height: 12),
-                  _periodSwitch(),
-                  SizedBox(height: 6),
-                  if (_shortHistory)
-                    Container(
-                      width: double.infinity,
-                      margin: EdgeInsets.symmetric(horizontal: 12),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: ds.hintBg,
-                        border: Border.all(color: ds.dark),
-                      ),
-                      child: Text(
-                        l10n.shortHistory,
-                        style: TextStyle(
-                          color: ds.dim,
-                          fontSize: PipText.body,
-                          letterSpacing: 1,
-                        ),
+                if (_tab == 0)
+                  // The whole tab is one scroll view, not a fixed column with
+                  // a scrolling list pinned at the bottom. RefreshIndicator
+                  // only reacts to the scrollable under the finger, so with
+                  // the metrics fixed above there was nowhere to pull from at
+                  // the top of the screen.
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _pullRefresh,
+                      color: ds.primary,
+                      backgroundColor: ds.bg,
+                      child: CustomScrollView(
+                        // Always scrollable so the gesture works even when the
+                        // content is shorter than the screen.
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _monitoringBanner(),
+                                _approvalAlarm(),
+                                _metricsRow(),
+                                _screenTimeBar(),
+                                _batterySection(),
+                                SizedBox(height: 12),
+                                _periodSwitch(),
+                                SizedBox(height: 6),
+                                if (_shortHistory)
+                                  Container(
+                                    margin: EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: ds.hintBg,
+                                      border: Border.all(color: ds.dark),
+                                    ),
+                                    child: Text(
+                                      l10n.shortHistory,
+                                      style: TextStyle(
+                                        color: ds.dim,
+                                        fontSize: PipText.body,
+                                        letterSpacing: 1,
+                                      ),
+                                    ),
+                                  ),
+                                SizedBox(height: 12),
+                                if (!_hasAccess) _accessHint(),
+                                if (_hasAccess) _sortHeader(),
+                                if (_hasAccess) _periodDrainLine(),
+                                if (_hasAccess && _rows.isNotEmpty)
+                                  _searchField(),
+                              ],
+                            ),
+                          ),
+                          if (_visibleRows.isEmpty)
+                            SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: Center(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 40),
+                                  child: Text(
+                                    _rows.isEmpty
+                                        ? l10n.noDataYet
+                                        : l10n.searchNoMatch,
+                                    style: TextStyle(
+                                      color: ds.dim,
+                                      letterSpacing: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            SliverList.builder(
+                              itemCount: _visibleRows.length,
+                              itemBuilder: (ctx, i) => _appRow(i),
+                            ),
+                        ],
                       ),
                     ),
-                  SizedBox(height: 12),
-                  if (!_hasAccess) _accessHint(),
-                  if (_hasAccess) _sortHeader(),
-                  Expanded(
-                    child: _rows.isEmpty
-                        ? Center(
-                            child: Text(
-                              l10n.noDataYet,
-                              style: TextStyle(color: ds.dim, letterSpacing: 2),
-                            ),
-                          )
-                        : _appList(),
-                  ),
-                ] else if (_tab == 1)
+                  )
+                else if (_tab == 1)
                   Expanded(child: _vaultTab())
                 else if (_tab == 2)
                   Expanded(child: _sysInfoTab())
@@ -718,8 +1041,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          // CRT scanlines overlay
-          IgnorePointer(child: _Scanlines()),
+          // Scanlines are drawn by CrtOverlay, which is palette-aware and
+          // wraps the whole app including dialogs. A second _Scanlines layer
+          // used to sit here and drew on every palette, including the light
+          // and high-contrast ones that are meant to stay clean.
         ],
       ),
     );
@@ -756,6 +1081,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
           SizedBox(width: 8),
           _cornerButton(Icons.palette_outlined, _cycleTheme),
+          _cornerButton(Icons.download_outlined, _exportUsage),
           _cornerButton(Icons.refresh, _manualRefresh),
           _cornerButton(Icons.delete_sweep, _resetGroup),
           _cornerButton(Icons.attach_money_outlined, _showTipModal),
@@ -764,21 +1090,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// A header button.
+  ///
+  /// Sized to [_touchTarget], the Material minimum. It used to come out at
+  /// about 29dp — roughly 60% of the minimum — which is a real miss rate, not
+  /// a matter of taste. The title beside these is in a FittedBox and simply
+  /// renders smaller to make room.
   Widget _cornerButton(IconData icon, VoidCallback onTap) {
     final ds = context.ds;
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         margin: EdgeInsets.only(left: 6),
-        padding: EdgeInsets.all(5),
+        width: _touchTarget,
+        height: _touchTarget,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           border: Border.all(color: ds.primary, width: 1),
           color: ds.dark,
         ),
-        child: Icon(icon, color: ds.primary, size: 17),
+        child: Icon(icon, color: ds.primary, size: 24),
       ),
     );
   }
+
+  /// Material's minimum touch target.
+  static const double _touchTarget = 48;
 
   // ---- Tab switch (SYSTEM / VAULT / SYSINFO / INFO) ----
   Widget _tabSwitch() {
@@ -833,7 +1171,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _vaultTab() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-    return Column(
+    // The wallet panel above stays put, so the pull has to start over the
+    // list below it. Making this tab one scroll view would mean restructuring
+    // the connect flow and its four sub-tabs, which is a separate job.
+    return RefreshIndicator(
+      onRefresh: () async {
+        if (_walletAddress != null) await _loadVaultData();
+      },
+      color: ds.primary,
+      backgroundColor: ds.bg,
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Wallet address entry + scan header
@@ -979,21 +1326,27 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // Privacy policy
         _privacySection(),
       ],
+      ),
     );
   }
 
   Widget _vaultTabButton(String label, int idx) {
     final ds = context.ds;
     final active = _vaultSection == idx;
+    final flash = idx == 3 && _highlightDelegTab;
     return Expanded(
       child: GestureDetector(
         onTap: () => setState(() => _vaultSection = idx),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 400),
           padding: EdgeInsets.symmetric(vertical: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: active ? ds.primary : Colors.transparent,
-            border: Border.all(color: ds.primary, width: 1),
+            border: Border.all(
+              color: flash ? ds.dangerBorder : ds.primary,
+              width: flash ? 3 : 1,
+            ),
           ),
           child: Text(
             label,
@@ -1093,6 +1446,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 )
               else ...[
                 _delegationAlert(ds, l10n, _delegatedAccounts.length),
+                SizedBox(height: 8),
+                _revokeAllButton(),
                 SizedBox(height: 8),
                 ..._delegatedAccounts.map((t) => _delegationRow(t)),
               ],
@@ -1361,7 +1716,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Token accounts with an active delegate — the approvals a user should
   /// review and revoke.
   List<TokenAccountInfo> get _delegatedAccounts =>
-      _tokenAccounts.where((t) => t.hasDelegate).toList();
+      delegatedAccounts(_tokenAccounts);
 
   /// Prominent warning that approvals exist. Listing them further down is not
   /// enough: an approval lets a third party move tokens without asking again,
@@ -1398,6 +1753,99 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  /// Revokes every active approval, batched into as few transactions as the
+  /// packet limit allows.
+  ///
+  /// Exists because the moment this screen matters is the moment someone has
+  /// spotted a spender they do not recognise, and clearing them one at a time
+  /// is the wrong thing to ask for then.
+  Widget _revokeAllButton() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    final accounts = _delegatedAccounts;
+    if (accounts.length < 2) return const SizedBox.shrink();
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: ds.dangerTextStrong,
+          minimumSize: const Size(0, 48),
+          shape: const RoundedRectangleBorder(),
+        ),
+        onPressed: _revokeBusy ? null : () => _confirmRevokeAll(accounts),
+        child: Text(
+          l10n.revokeAll(accounts.length),
+          style: TextStyle(
+            color: ds.bg,
+            fontSize: PipText.value,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmRevokeAll(List<TokenAccountInfo> accounts) async {
+    final l10n = AppLocalizations.of(context);
+    final ds = context.ds;
+    final pubkeys = accounts.map((a) => a.pubkey).toList();
+    final txCount = RevokeService.chunkAccounts(pubkeys).length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.panel,
+        title: Text(
+          l10n.revokeAll(accounts.length),
+          style: TextStyle(color: ds.primary, fontSize: PipText.heading),
+        ),
+        content: Text(
+          l10n.revokeAllConfirm(accounts.length, txCount),
+          style: TextStyle(color: ds.dim, fontSize: PipText.body),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(minimumSize: const Size(88, 48)),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              l10n.cancel,
+              style: TextStyle(color: ds.dim, fontSize: PipText.value),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ds.dangerTextStrong,
+              minimumSize: const Size(96, 48),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              l10n.revokeAll(accounts.length),
+              style: TextStyle(color: ds.bg, fontSize: PipText.value),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final owner = _walletAddress;
+    if (owner == null) return;
+    setState(() => _revokeBusy = true);
+    try {
+      await RevokeService.instance.revokeAll(
+        ownerAddress: owner,
+        tokenAccounts: pubkeys,
+      );
+      if (!mounted) return;
+      _toast(l10n.revokeAllDone(accounts.length));
+      await _loadVaultData();
+    } catch (e) {
+      if (!mounted) return;
+      _toast('$e');
+    } finally {
+      if (mounted) setState(() => _revokeBusy = false);
+    }
   }
 
   Widget _delegationRow(TokenAccountInfo t) {
@@ -1859,6 +2307,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _walletAddress = auth.address;
         _walletLabel = auth.accountLabel;
       });
+      unawaited(_scanApprovals());
+    }
+  }
+
+  /// Scans for active token approvals so the home screen can warn about them.
+  ///
+  /// Deliberately lighter than [_loadVaultData], which makes four calls: the
+  /// alarm only needs the delegate scan, and it has to run without the user
+  /// opening the vault. Until this existed, approvals were only discovered by
+  /// someone who already went looking — which is the one case where a warning
+  /// is not needed.
+  ///
+  /// Failures are silent: an unreachable RPC at launch is not worth an error
+  /// banner, and the vault reports properly when opened.
+  Future<void> _scanApprovals() async {
+    final addr = _walletAddress;
+    if (addr == null) return;
+    try {
+      final accounts = await SolScanService.instance.scanDelegates(addr);
+      if (!mounted) return;
+      setState(() => _tokenAccounts = accounts);
+    } catch (e) {
+      log('_scanApprovals error: $e');
     }
   }
 
@@ -1870,6 +2341,92 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// at all, or it is running but the OEM power manager is free to kill it.
   /// Nothing is drawn when both are fine — a permanent nag trains people to
   /// ignore the one time it matters.
+  /// Home-screen warning that the connected wallet has live token approvals.
+  ///
+  /// An approval lets a delegate move those tokens again at any time without
+  /// a further prompt, so it belongs where the user actually looks rather than
+  /// on a tab they have to think to open. Tapping it lands on the list.
+  ///
+  /// Not dismissible: it disappears when the approvals do. A security warning
+  /// that can be swiped away is one people learn to swipe away.
+  Widget _approvalAlarm() {
+    if (!shouldWarnAboutApprovals(_walletAddress, _tokenAccounts)) {
+      return const SizedBox.shrink();
+    }
+    final count = _delegatedAccounts.length;
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _goToApprovals,
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: ds.dangerBg,
+            border: Border.all(color: ds.dangerBorder, width: 1),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.approvalAlarmTitle,
+                style: TextStyle(
+                  color: ds.dangerTextStrong,
+                  fontSize: PipText.note,
+                  letterSpacing: 1,
+                ),
+              ),
+              SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.approvalAlarmBody(count),
+                      style: TextStyle(
+                        color: ds.dangerText,
+                        fontSize: PipText.note,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    l10n.approvalAlarmAction,
+                    style: TextStyle(
+                      color: ds.dangerTextStrong,
+                      fontSize: PipText.note,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    color: ds.dangerTextStrong,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Jumps straight to the approvals list and flashes the sub-tab, so the
+  /// route from the warning to the detail is visible rather than guessed at.
+  void _goToApprovals() {
+    setState(() {
+      _tab = 1;
+      _vaultSection = 3;
+      _highlightDelegTab = true;
+    });
+    Future.delayed(const Duration(milliseconds: 2200), () {
+      if (mounted) setState(() => _highlightDelegTab = false);
+    });
+  }
+
   Widget _monitoringBanner() {
     final l10n = AppLocalizations.of(context);
     final ds = context.ds;
@@ -1999,13 +2556,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _metricBlock(l10n.uptime, _uptime.isEmpty ? '...' : _uptime),
           if (_batteryInfoAvailable) ...[
             SizedBox(width: 12),
-            // Only the total: the charge cell to the left already shows the
-            // level, so "2946 / 2946 mAh" was both redundant and a second line.
+            // Charge now over total, so the cell moves with the battery
+            // instead of showing one fixed number. FittedBox in _metricBlock
+            // shrinks it rather than wrapping to a second line.
             _metricBlock(
               l10n.batteryCapacity,
-              _effectiveCapacityUah > 0
-                  ? '${(_effectiveCapacityUah / 1000.0).round()} mAh'
-                  : '...',
+              _effectiveCapacityUah > 0 && _currentChargeUah > 0
+                  ? '${(_currentChargeUah / 1000.0).round()}'
+                      ' / ${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                  : _effectiveCapacityUah > 0
+                      ? '${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                      : '...',
               onLongPress: _effectiveCapacityUah > 0 ? _showCalibrationDialog : null,
             ),
           ],
@@ -2203,6 +2764,162 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // ---- Sort header ----
+  /// The measured discharge the per-app figures are shares of.
+  ///
+  /// Shown so the estimates can be checked: they divide up this number and
+  /// nothing else. Hidden until there is enough sample history, rather than
+  /// rendering a zero that would read as a measurement.
+  Widget _periodDrainLine() {
+    if (_periodDrainUah <= 0) return const SizedBox.shrink();
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 2, 12, 0),
+      child: Text(
+        l10n.periodDrainTotal((_periodDrainUah / 1000).toStringAsFixed(0)),
+        style: TextStyle(color: ds.dim, fontSize: PipText.note),
+      ),
+    );
+  }
+
+  /// Filter box over the application list.
+  ///
+  /// Filters the already-loaded rows rather than re-querying: the percentages
+  /// and the drain split are computed against the full period, and narrowing
+  /// the query would silently rescale them to whatever was typed.
+  /// Discharge curve for the period on screen.
+  ///
+  /// Hidden until two samples exist, since a single point is a dot, not a
+  /// trend. The placeholder says samples are being collected rather than
+  /// showing an empty frame that reads as a failure.
+  Widget _batterySection() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    // The gauge's own full-charge reading, not the design capacity: the
+    // samples are counter values on the gauge's scale, and mixing the two put
+    // a full battery at 65% of the axis.
+    final capacity = _capacityUah > 0 ? _capacityUah : _effectiveCapacityUah;
+    if (capacity <= 0) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              setState(() => _batteryExpanded = !_batteryExpanded);
+              StatsDb.instance.setMeta(
+                'battery_chart_expanded',
+                _batteryExpanded ? '1' : '0',
+              );
+            },
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  Text(
+                    l10n.batteryChartTitle,
+                    style: TextStyle(
+                      color: ds.dim,
+                      fontSize: PipText.note,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  SizedBox(width: 6),
+                  Icon(
+                    _batteryExpanded ? Icons.expand_less : Icons.expand_more,
+                    color: ds.dim,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: 4),
+          if (_batteryExpanded) _batteryBody(ds, l10n, capacity),
+        ],
+      ),
+    );
+  }
+
+  /// The chart itself, or a one-line note explaining why there is none.
+  ///
+  /// A flat line is drawn as text rather than as a chart: a phone that sat on
+  /// the charger produces a perfectly straight trace, which reads as a broken
+  /// widget instead of as "nothing happened".
+  Widget _batteryBody(
+    DeviceStatsColors ds,
+    AppLocalizations l10n,
+    int capacity,
+  ) {
+    final chart = BatteryChart(
+      points: _batteryPoints,
+      capacityUah: capacity,
+    );
+    if (_batteryPoints.length < 2 || !chart.hasVariation) {
+      return Container(
+        height: 44,
+        alignment: Alignment.centerLeft,
+        padding: EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(border: Border.all(color: ds.dark)),
+        child: Text(
+          _batteryPoints.length < 2
+              ? l10n.batteryChartEmpty
+              : l10n.batteryChartFlat,
+          style: TextStyle(
+            color: ds.dim,
+            fontSize: PipText.note,
+            letterSpacing: 1,
+          ),
+        ),
+      );
+    }
+    return chart;
+  }
+
+  Widget _searchField() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (v) => setState(() => _appQuery = v),
+        style: TextStyle(color: ds.primary, fontSize: PipText.value),
+        cursorColor: ds.primary,
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          hintText: l10n.searchHint,
+          hintStyle: TextStyle(
+            color: ds.dim,
+            fontSize: PipText.label,
+            letterSpacing: 1,
+          ),
+          prefixIcon: Icon(Icons.search, color: ds.dim, size: 22),
+          suffixIcon: _appQuery.isEmpty
+              ? null
+              : IconButton(
+                  icon: Icon(Icons.close, color: ds.dim, size: 22),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _appQuery = '');
+                  },
+                ),
+          enabledBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: ds.dark),
+            borderRadius: BorderRadius.zero,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: ds.primary),
+            borderRadius: BorderRadius.zero,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _sortHeader() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
@@ -2264,12 +2981,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // ---- App list ----
-  Widget _appList() {
+  /// One application row.
+  ///
+  /// Split out of the old _appList ListView so the SYSTEM tab can render the
+  /// whole page as one scroll view: pull-to-refresh only reacts to the
+  /// scrollable under the finger, and with the metrics pinned above a short
+  /// list there was nothing to pull on at the top of the screen.
+  Widget _appRow(int i) {
     final ds = context.ds;
-    return ListView.builder(
-      itemCount: _rows.length,
-      itemBuilder: (ctx, i) {
-        final r = _rows[i];
+    final l10n = AppLocalizations.of(context);
+    {
+      {
+        final r = _visibleRows[i];
         final pkg = r['package'] as String;
         return Container(
           margin: EdgeInsets.symmetric(horizontal: 12, vertical: 1),
@@ -2323,46 +3046,66 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 SizedBox(height: 3),
                 _usageBar(r['fg_ms'] as int),
                 SizedBox(height: 3),
-                if (_batteryInfoAvailable) ...[
-                  if (_charging) ...[
-                    Row(
+                // One line, not a second bar. The amber bar drew
+                // drain_pct/100 — the very same fraction the green usage bar
+                // already draws — so the two were always identical in width
+                // and carried one piece of information between them.
+                if (((r['rx_bytes'] as int?) ?? 0) +
+                        ((r['tx_bytes'] as int?) ?? 0) >
+                    0)
+                  Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Row(
                       children: [
-                        Icon(Icons.flash_on, color: ds.battery, size: 16),
+                        Icon(Icons.swap_vert, color: ds.dim, size: 16),
                         SizedBox(width: 8),
-                        Text(
-                          'CHARGING',
-                          style: TextStyle(
-                            color: ds.battery,
-                            fontSize: PipText.body,
-                            letterSpacing: 1,
-                            fontWeight: FontWeight.bold,
+                        Expanded(
+                          child: Text(
+                            l10n.netUsage(
+                              formatBytes((r['rx_bytes'] as int?) ?? 0),
+                              formatBytes((r['tx_bytes'] as int?) ?? 0),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: ds.dim,
+                              fontSize: PipText.note,
+                              letterSpacing: 1,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                  ] else ...[
-                    if ((r['drain_pct'] as num?) != null && (r['drain_pct'] as num) > 0) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _batteryBar((r['drain_pct'] as num).toDouble()),
+                  ),
+                if (_batteryInfoAvailable &&
+                    (r['screen_pct'] as num?) != null &&
+                    (r['screen_pct'] as num) > 0) ...[
+                  Row(
+                    children: [
+                      Icon(
+                        _charging ? Icons.flash_on : Icons.battery_std,
+                        color: ds.battery,
+                        size: 16,
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _drainLabel(
+                            l10n,
+                            (r['screen_pct'] as num).toDouble(),
+                            (r['drain_mah'] as num?)?.toDouble(),
                           ),
-                          SizedBox(width: 8),
-                          Text(
-                            _drainLabel(
-                              (r['drain_pct'] as num).toDouble(),
-                              (r['drain_mah'] as num).toDouble(),
-                            ),
-                            style: TextStyle(
-                              color: ds.battery,
-                              fontSize: PipText.body,
-                              letterSpacing: 1,
-                            ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: ds.battery,
+                            fontSize: PipText.body,
+                            letterSpacing: 1,
                           ),
-                        ],
+                        ),
                       ),
                     ],
-                  ],
+                  ),
                 ],
               ],
             ),
@@ -2377,8 +3120,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             onLongPress: () => _resetPackage(pkg),
           ),
         );
-      },
-    );
+      }
+    }
   }
 
 /// Proportional green usage bar for a row relative to total screen time.
@@ -2400,27 +3143,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  /// Proportional amber battery drain bar for a row relative to total drain.
-  Widget _batteryBar(double pct) {
-    final ds = context.ds;
-    final frac = (pct / 100.0).clamp(0.0, 1.0);
-    return Container(
-      height: 6,
-      decoration: BoxDecoration(
-        color: ds.dark,
-        border: Border.all(color: ds.dark, width: 1),
-      ),
-      alignment: Alignment.centerLeft,
-      child: FractionallySizedBox(
-        widthFactor: frac,
-        child: Container(color: ds.battery),
-      ),
-    );
-  }
 
-  /// Formats the drain percentage and mAh into a label string.
-  String _drainLabel(double pct, double mah) {
-    return '${pct.toStringAsFixed(1)}% · ${mah.toStringAsFixed(0)} mAh';
+  /// The line under a row: share of screen time, and the share of measured
+  /// discharge attributed to it.
+  ///
+  /// The mAh figure carries a tilde and is absent entirely until real
+  /// discharge has been measured, rather than showing a confident zero. On
+  /// charger there is nothing to attribute, so it says that instead.
+  String _drainLabel(AppLocalizations l10n, double screenPct, double? mah) {
+    final share = l10n.appScreenShare(screenPct.toStringAsFixed(1));
+    if (_charging) return '$share · ${l10n.appCharging}';
+    if (mah == null || mah <= 0) {
+      return '$share · ${l10n.appDrainMeasuring}';
+    }
+    return '$share · ${l10n.appDrainEstimate(mah.toStringAsFixed(0))}';
   }
 
   // ---- SysInfo tab (device technical details) ----
@@ -2504,7 +3240,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _infoTab() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: _pullRefresh,
+      color: ds.primary,
+      backgroundColor: ds.bg,
+      child: ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.all(12),
       children: [
         _infoSection(ds, l10n, l10n.aboutApp, {
@@ -2527,6 +3268,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           'privacy_url': 'https://pipstats.pages.dev/privacy',
         }),
       ],
+      ),
     );
   }
 
@@ -2862,33 +3604,4 @@ class _PlaceholderIcon extends StatelessWidget {
 }
 
 /// CRT scanline overlay for Pip-Boy aesthetic.
-class _Scanlines extends StatelessWidget {
-  const _Scanlines();
 
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size.infinite,
-      painter: _ScanlinePainter(context.ds.scanline),
-    );
-  }
-}
-
-class _ScanlinePainter extends CustomPainter {
-  _ScanlinePainter(this.scanline);
-
-  final Color scanline;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = scanline
-      ..strokeWidth = 1;
-    for (double y = 0; y < size.height; y += 3) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}

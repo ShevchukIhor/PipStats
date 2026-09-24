@@ -107,7 +107,7 @@ abstract class AppLocalizations {
   /// No description provided for @headerTitle.
   ///
   /// In en, this message translates to:
-  /// **'PIPSTATS  LOCAL  DEVICE  STATS'**
+  /// **'PIPSTATS'**
   String get headerTitle;
 
   /// No description provided for @systemTab.
@@ -883,6 +883,126 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'ENABLE'**
   String get monitoringEnableNotif;
+
+  /// No description provided for @appCharging.
+  ///
+  /// In en, this message translates to:
+  /// **'CHARGING'**
+  String get appCharging;
+
+  /// No description provided for @appScreenShare.
+  ///
+  /// In en, this message translates to:
+  /// **'{pct}% SCREEN'**
+  String appScreenShare(String pct);
+
+  /// No description provided for @appDrainEstimate.
+  ///
+  /// In en, this message translates to:
+  /// **'~{mah} mAh'**
+  String appDrainEstimate(String mah);
+
+  /// No description provided for @appDrainMeasuring.
+  ///
+  /// In en, this message translates to:
+  /// **'MEASURING'**
+  String get appDrainMeasuring;
+
+  /// No description provided for @periodDrainTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'DISCHARGED THIS PERIOD: {mah} mAh'**
+  String periodDrainTotal(String mah);
+
+  /// No description provided for @exportDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to Downloads: {name}'**
+  String exportDone(String name);
+
+  /// No description provided for @exportFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Export failed'**
+  String get exportFailed;
+
+  /// No description provided for @exportNothing.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to export'**
+  String get exportNothing;
+
+  /// No description provided for @searchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'FILTER APPS'**
+  String get searchHint;
+
+  /// No description provided for @searchNoMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'NO MATCHES'**
+  String get searchNoMatch;
+
+  /// No description provided for @batteryChartTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'BATTERY'**
+  String get batteryChartTitle;
+
+  /// No description provided for @batteryChartEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'COLLECTING SAMPLES'**
+  String get batteryChartEmpty;
+
+  /// No description provided for @netUsage.
+  ///
+  /// In en, this message translates to:
+  /// **'{down} down · {up} up'**
+  String netUsage(String down, String up);
+
+  /// No description provided for @revokeAll.
+  ///
+  /// In en, this message translates to:
+  /// **'REVOKE ALL ({count})'**
+  String revokeAll(int count);
+
+  /// No description provided for @revokeAllConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoke the delegate on all {count} token accounts? This is sent as {txs} transaction(s) and each must be approved in the wallet.'**
+  String revokeAllConfirm(int count, int txs);
+
+  /// No description provided for @revokeAllDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoked {count} approvals'**
+  String revokeAllDone(int count);
+
+  /// No description provided for @batteryChartFlat.
+  ///
+  /// In en, this message translates to:
+  /// **'NO CHANGE — ON CHARGER OR IDLE'**
+  String get batteryChartFlat;
+
+  /// No description provided for @approvalAlarmTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'! TOKEN SPENDING APPROVALS'**
+  String get approvalAlarmTitle;
+
+  /// No description provided for @approvalAlarmBody.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can move those tokens without asking again.'**
+  String approvalAlarmBody(num count);
+
+  /// No description provided for @approvalAlarmAction.
+  ///
+  /// In en, this message translates to:
+  /// **'REVIEW'**
+  String get approvalAlarmAction;
 }
 
 class _AppLocalizationsDelegate

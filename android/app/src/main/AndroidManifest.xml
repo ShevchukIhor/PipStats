@@ -43,21 +43,38 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
+        <!-- specialUse, not dataSync. Android 15 caps dataSync at six hours a
+             day and then *crashes* the app: first
+             ForegroundServiceDidNotStopInTimeException when the budget runs
+             out, then ForegroundServiceStartNotAllowedException on every
+             restart. Continuous device monitoring is exactly what that cap
+             exists to stop, so the type was wrong rather than the usage. -->
         <service
             android:name=".ForegroundService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous on-device battery and app-usage
+                    measurement. The data never leaves the device and no
+                    standard foreground service type covers passive telemetry
+                    of the device itself." />
+        </service>
     </application>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission"/>
+    <!-- Reading other apps' network usage needs this alongside the usage
+         access grant the app already requires. -->
+    <uses-permission android:name="android.permission.READ_NETWORK_USAGE_HISTORY"
+        tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <queries>
         <!-- Mobile Wallet Adapter: makes wallet apps visible on Android 11+
              package-visibility rules without relying on QUERY_ALL_PACKAGES. -->

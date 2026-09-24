@@ -1,7 +1,7 @@
 {
   "@@locale": "uk",
   "appTitle": "PIPSTATS",
-  "headerTitle": "PIPSTATS  ЛОКАЛЬНІ  СТАТИСТИКИ",
+  "headerTitle": "PIPSTATS",
 
   "systemTab": "СИСТЕМА",
   "vaultTab": "СХОВИЩЕ",
@@ -148,5 +148,52 @@
   "monitoringBatteryOpt": "Керування живленням Android може вбивати фоновий збір на цьому пристрої.",
   "monitoringAllow": "ДОЗВОЛИТИ",
   "monitoringNoNotif": "Сповіщення заблоковані, тож сповіщення моніторингу не показується.",
-  "monitoringEnableNotif": "УВІМКНУТИ"
+  "monitoringEnableNotif": "УВІМКНУТИ",
+  "appCharging": "ЗАРЯДЖАЄТЬСЯ",
+  "appScreenShare": "{pct}% ЕКРАНУ",
+  "appDrainEstimate": "~{mah} mAh",
+  "appDrainMeasuring": "ВИМІРЮВАННЯ",
+  "periodDrainTotal": "РОЗРЯДЖЕНО ЗА ПЕРІОД: {mah} mAh",
+  "@appScreenShare": {
+    "placeholders": { "pct": { "type": "String" } }
+  },
+  "@appDrainEstimate": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "@periodDrainTotal": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "exportDone": "Збережено в Downloads: {name}",
+  "exportFailed": "Експорт не вдався",
+  "exportNothing": "Нема чого експортувати",
+  "@exportDone": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "searchHint": "ФІЛЬТР ЗАСТОСУНКІВ",
+  "searchNoMatch": "НЕМАЄ ЗБІГІВ",
+  "batteryChartTitle": "БАТАРЕЯ",
+  "batteryChartEmpty": "ЗБИРАЄМО ЗАМІРИ",
+  "netUsage": "{down} вх · {up} вих",
+  "@netUsage": {
+    "placeholders": { "down": { "type": "String" }, "up": { "type": "String" } }
+  },
+  "revokeAll": "ВІДКЛИКАТИ ВСІ ({count})",
+  "revokeAllConfirm": "Відкликати делегата на всіх {count} токен-акаунтах? Це надсилається як {txs} транзакцій, і кожну треба підтвердити в гаманці.",
+  "revokeAllDone": "Відкликано дозволів: {count}",
+  "@revokeAll": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "@revokeAllConfirm": {
+    "placeholders": { "count": { "type": "int" }, "txs": { "type": "int" } }
+  },
+  "@revokeAllDone": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batteryChartFlat": "БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ",
+  "approvalAlarmTitle": "! ДОЗВОЛИ НА ВИТРАТУ ТОКЕНІВ",
+  "approvalAlarmBody": "{count, plural, =1{1 токен-акаунт має активного делегата} few{{count} токен-акаунти мають активних делегатів} other{{count} токен-акаунтів мають активних делегатів}}, який може переміщати ці токени без повторного запиту.",
+  "approvalAlarmAction": "ПЕРЕГЛЯНУТИ",
+  "@approvalAlarmBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  }
 }

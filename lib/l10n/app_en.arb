@@ -1,7 +1,7 @@
 {
   "@@locale": "en",
   "appTitle": "PIPSTATS",
-  "headerTitle": "PIPSTATS  LOCAL  DEVICE  STATS",
+  "headerTitle": "PIPSTATS",
 
   "systemTab": "SYSTEM",
   "vaultTab": "VAULT",
@@ -174,5 +174,52 @@
   "monitoringBatteryOpt": "Android power management may kill background collection on this device.",
   "monitoringAllow": "ALLOW",
   "monitoringNoNotif": "Notifications are blocked, so the monitoring notification cannot be shown.",
-  "monitoringEnableNotif": "ENABLE"
+  "monitoringEnableNotif": "ENABLE",
+  "appCharging": "CHARGING",
+  "appScreenShare": "{pct}% SCREEN",
+  "appDrainEstimate": "~{mah} mAh",
+  "appDrainMeasuring": "MEASURING",
+  "periodDrainTotal": "DISCHARGED THIS PERIOD: {mah} mAh",
+  "@appScreenShare": {
+    "placeholders": { "pct": { "type": "String" } }
+  },
+  "@appDrainEstimate": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "@periodDrainTotal": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "exportDone": "Saved to Downloads: {name}",
+  "exportFailed": "Export failed",
+  "exportNothing": "Nothing to export",
+  "@exportDone": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "searchHint": "FILTER APPS",
+  "searchNoMatch": "NO MATCHES",
+  "batteryChartTitle": "BATTERY",
+  "batteryChartEmpty": "COLLECTING SAMPLES",
+  "netUsage": "{down} down · {up} up",
+  "@netUsage": {
+    "placeholders": { "down": { "type": "String" }, "up": { "type": "String" } }
+  },
+  "revokeAll": "REVOKE ALL ({count})",
+  "revokeAllConfirm": "Revoke the delegate on all {count} token accounts? This is sent as {txs} transaction(s) and each must be approved in the wallet.",
+  "revokeAllDone": "Revoked {count} approvals",
+  "@revokeAll": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "@revokeAllConfirm": {
+    "placeholders": { "count": { "type": "int" }, "txs": { "type": "int" } }
+  },
+  "@revokeAllDone": {
+    "placeholders": { "count": { "type": "int" } }
+  },
+  "batteryChartFlat": "NO CHANGE — ON CHARGER OR IDLE",
+  "approvalAlarmTitle": "! TOKEN SPENDING APPROVALS",
+  "approvalAlarmBody": "{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can move those tokens without asking again.",
+  "approvalAlarmAction": "REVIEW",
+  "@approvalAlarmBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  }
 }

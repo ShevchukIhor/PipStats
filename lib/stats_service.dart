@@ -104,6 +104,46 @@ class StatsService {
     }
   }
 
+  /// Per-package network bytes since [sinceMs].
+  ///
+  /// Each entry has `package`, `rx_bytes` and `tx_bytes`. Empty when usage
+  /// access has not been granted — the same grant this app already needs for
+  /// usage events, so no extra prompt is involved.
+  static Future<List<Map<String, Object?>>> networkUsage(int sinceMs) async {
+    try {
+      final rows = await _channel.invokeListMethod<Map>('networkUsage', {
+        'since': sinceMs,
+      });
+      if (rows == null) return const [];
+      return rows.map((r) => Map<String, Object?>.from(r)).toList();
+    } catch (e) {
+      log('networkUsage error: $e');
+      return const [];
+    }
+  }
+
+  /// Writes [content] into the shared Downloads folder.
+  ///
+  /// Returns the file name it actually landed under — MediaStore renames on
+  /// collision rather than overwriting, so this can differ from [filename] —
+  /// or null if the write failed.
+  static Future<String?> exportToDownloads(
+    String filename,
+    String content, {
+    String mime = 'text/csv',
+  }) async {
+    try {
+      return await _channel.invokeMethod<String>('exportToDownloads', {
+        'filename': filename,
+        'content': content,
+        'mime': mime,
+      });
+    } catch (e) {
+      log('exportToDownloads error: $e');
+      return null;
+    }
+  }
+
   /// Whether our notifications can be shown.
   ///
   /// The monitoring notification is the user's only signal that collection is

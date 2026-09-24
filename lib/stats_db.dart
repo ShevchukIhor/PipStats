@@ -261,6 +261,24 @@ class StatsDb {
     }, conflictAlgorithm: ConflictAlgorithm.ignore);
   }
 
+  /// All battery samples in [from, to], oldest first.
+  ///
+  /// Needed to measure real discharge across a period: the first and last
+  /// samples alone cannot tell discharge from a charge that happened in
+  /// between, because the counter rises while charging.
+  Future<List<Map<String, Object?>>> batterySamplesBetween(
+    int from,
+    int to,
+  ) async {
+    final d = await db;
+    return d.query(
+      'battery_samples',
+      where: 'ts >= ? AND ts <= ?',
+      whereArgs: [from, to],
+      orderBy: 'ts ASC',
+    );
+  }
+
   /// Earliest battery sample timestamp at or after [ts], or null.
   Future<Map<String, Object?>?> firstBatterySampleAtOrAfter(
     int ts,

@@ -13,7 +13,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appTitle => 'PIPSTATS';
 
   @override
-  String get headerTitle => 'PIPSTATS  LOCAL  DEVICE  STATS';
+  String get headerTitle => 'PIPSTATS';
 
   @override
   String get systemTab => 'SYSTEM';
@@ -481,4 +481,93 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get monitoringEnableNotif => 'ENABLE';
+
+  @override
+  String get appCharging => 'CHARGING';
+
+  @override
+  String appScreenShare(String pct) {
+    return '$pct% SCREEN';
+  }
+
+  @override
+  String appDrainEstimate(String mah) {
+    return '~$mah mAh';
+  }
+
+  @override
+  String get appDrainMeasuring => 'MEASURING';
+
+  @override
+  String periodDrainTotal(String mah) {
+    return 'DISCHARGED THIS PERIOD: $mah mAh';
+  }
+
+  @override
+  String exportDone(String name) {
+    return 'Saved to Downloads: $name';
+  }
+
+  @override
+  String get exportFailed => 'Export failed';
+
+  @override
+  String get exportNothing => 'Nothing to export';
+
+  @override
+  String get searchHint => 'FILTER APPS';
+
+  @override
+  String get searchNoMatch => 'NO MATCHES';
+
+  @override
+  String get batteryChartTitle => 'BATTERY';
+
+  @override
+  String get batteryChartEmpty => 'COLLECTING SAMPLES';
+
+  @override
+  String netUsage(String down, String up) {
+    return '$down down · $up up';
+  }
+
+  @override
+  String revokeAll(int count) {
+    return 'REVOKE ALL ($count)';
+  }
+
+  @override
+  String revokeAllConfirm(int count, int txs) {
+    return 'Revoke the delegate on all $count token accounts? This is sent as $txs transaction(s) and each must be approved in the wallet.';
+  }
+
+  @override
+  String revokeAllDone(int count) {
+    return 'Revoked $count approvals';
+  }
+
+  @override
+  String get batteryChartFlat => 'NO CHANGE — ON CHARGER OR IDLE';
+
+  @override
+  String get approvalAlarmTitle => '! TOKEN SPENDING APPROVALS';
+
+  @override
+  String approvalAlarmBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString token accounts have active delegates',
+      one: '1 token account has an active delegate',
+    );
+    return '$_temp0 that can move those tokens without asking again.';
+  }
+
+  @override
+  String get approvalAlarmAction => 'REVIEW';
 }
