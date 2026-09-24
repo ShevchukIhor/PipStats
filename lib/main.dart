@@ -393,6 +393,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (mounted) setState(() {});
   }
 
+  /// Pull-to-refresh for the tabs. Also re-checks monitoring health, since a
+  /// pull is exactly when someone is asking whether the data is current.
+  Future<void> _pullRefresh() async {
+    await _manualRefresh();
+    await _refreshMonitoringHealth();
+  }
+
   Future<void> _syncAndRefresh() async {
     if (_syncing) return;
     _syncing = true;
@@ -764,49 +771,87 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               children: [
                 _header(),
                 _tabSwitch(),
-                if (_tab == 0) ...[
-                  _monitoringBanner(),
-                  _metricsRow(),
-                  _screenTimeBar(),
-                  SizedBox(height: 12),
-                  _periodSwitch(),
-                  SizedBox(height: 6),
-                  if (_shortHistory)
-                    Container(
-                      width: double.infinity,
-                      margin: EdgeInsets.symmetric(horizontal: 12),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: ds.hintBg,
-                        border: Border.all(color: ds.dark),
-                      ),
-                      child: Text(
-                        l10n.shortHistory,
-                        style: TextStyle(
-                          color: ds.dim,
-                          fontSize: PipText.body,
-                          letterSpacing: 1,
-                        ),
+                if (_tab == 0)
+                  // The whole tab is one scroll view, not a fixed column with
+                  // a scrolling list pinned at the bottom. RefreshIndicator
+                  // only reacts to the scrollable under the finger, so with
+                  // the metrics fixed above there was nowhere to pull from at
+                  // the top of the screen.
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _pullRefresh,
+                      color: ds.primary,
+                      backgroundColor: ds.bg,
+                      child: CustomScrollView(
+                        // Always scrollable so the gesture works even when the
+                        // content is shorter than the screen.
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        slivers: [
+                          SliverToBoxAdapter(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _monitoringBanner(),
+                                _metricsRow(),
+                                _screenTimeBar(),
+                                SizedBox(height: 12),
+                                _periodSwitch(),
+                                SizedBox(height: 6),
+                                if (_shortHistory)
+                                  Container(
+                                    margin: EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                    ),
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: ds.hintBg,
+                                      border: Border.all(color: ds.dark),
+                                    ),
+                                    child: Text(
+                                      l10n.shortHistory,
+                                      style: TextStyle(
+                                        color: ds.dim,
+                                        fontSize: PipText.body,
+                                        letterSpacing: 1,
+                                      ),
+                                    ),
+                                  ),
+                                SizedBox(height: 12),
+                                if (!_hasAccess) _accessHint(),
+                                if (_hasAccess) _sortHeader(),
+                                if (_hasAccess) _periodDrainLine(),
+                              ],
+                            ),
+                          ),
+                          if (_rows.isEmpty)
+                            SliverFillRemaining(
+                              hasScrollBody: false,
+                              child: Center(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(vertical: 40),
+                                  child: Text(
+                                    l10n.noDataYet,
+                                    style: TextStyle(
+                                      color: ds.dim,
+                                      letterSpacing: 2,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            SliverList.builder(
+                              itemCount: _rows.length,
+                              itemBuilder: (ctx, i) => _appRow(i),
+                            ),
+                        ],
                       ),
                     ),
-                  SizedBox(height: 12),
-                  if (!_hasAccess) _accessHint(),
-                  if (_hasAccess) _sortHeader(),
-                  if (_hasAccess) _periodDrainLine(),
-                  Expanded(
-                    child: _rows.isEmpty
-                        ? Center(
-                            child: Text(
-                              l10n.noDataYet,
-                              style: TextStyle(color: ds.dim, letterSpacing: 2),
-                            ),
-                          )
-                        : _appList(),
-                  ),
-                ] else if (_tab == 1)
+                  )
+                else if (_tab == 1)
                   Expanded(child: _vaultTab())
                 else if (_tab == 2)
                   Expanded(child: _sysInfoTab())
@@ -815,8 +860,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ],
             ),
           ),
-          // CRT scanlines overlay
-          IgnorePointer(child: _Scanlines()),
+          // Scanlines are drawn by CrtOverlay, which is palette-aware and
+          // wraps the whole app including dialogs. A second _Scanlines layer
+          // used to sit here and drew on every palette, including the light
+          // and high-contrast ones that are meant to stay clean.
         ],
       ),
     );
@@ -861,21 +908,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// A header button.
+  ///
+  /// Sized to [_touchTarget], the Material minimum. It used to come out at
+  /// about 29dp — roughly 60% of the minimum — which is a real miss rate, not
+  /// a matter of taste. The title beside these is in a FittedBox and simply
+  /// renders smaller to make room.
   Widget _cornerButton(IconData icon, VoidCallback onTap) {
     final ds = context.ds;
     return GestureDetector(
       onTap: onTap,
+      behavior: HitTestBehavior.opaque,
       child: Container(
         margin: EdgeInsets.only(left: 6),
-        padding: EdgeInsets.all(5),
+        width: _touchTarget,
+        height: _touchTarget,
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           border: Border.all(color: ds.primary, width: 1),
           color: ds.dark,
         ),
-        child: Icon(icon, color: ds.primary, size: 17),
+        child: Icon(icon, color: ds.primary, size: 24),
       ),
     );
   }
+
+  /// Material's minimum touch target.
+  static const double _touchTarget = 48;
 
   // ---- Tab switch (SYSTEM / VAULT / SYSINFO / INFO) ----
   Widget _tabSwitch() {
@@ -930,7 +989,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _vaultTab() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-    return Column(
+    // The wallet panel above stays put, so the pull has to start over the
+    // list below it. Making this tab one scroll view would mean restructuring
+    // the connect flow and its four sub-tabs, which is a separate job.
+    return RefreshIndicator(
+      onRefresh: () async {
+        if (_walletAddress != null) await _loadVaultData();
+      },
+      color: ds.primary,
+      backgroundColor: ds.bg,
+      child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // Wallet address entry + scan header
@@ -1076,6 +1144,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         // Privacy policy
         _privacySection(),
       ],
+      ),
     );
   }
 
@@ -2383,12 +2452,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // ---- App list ----
-  Widget _appList() {
+  /// One application row.
+  ///
+  /// Split out of the old _appList ListView so the SYSTEM tab can render the
+  /// whole page as one scroll view: pull-to-refresh only reacts to the
+  /// scrollable under the finger, and with the metrics pinned above a short
+  /// list there was nothing to pull on at the top of the screen.
+  Widget _appRow(int i) {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-    return ListView.builder(
-      itemCount: _rows.length,
-      itemBuilder: (ctx, i) {
+    {
+      {
         final r = _rows[i];
         final pkg = r['package'] as String;
         return Container(
@@ -2490,8 +2564,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             onLongPress: () => _resetPackage(pkg),
           ),
         );
-      },
-    );
+      }
+    }
   }
 
 /// Proportional green usage bar for a row relative to total screen time.
@@ -2610,7 +2684,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _infoTab() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
-    return ListView(
+    return RefreshIndicator(
+      onRefresh: _pullRefresh,
+      color: ds.primary,
+      backgroundColor: ds.bg,
+      child: ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: EdgeInsets.all(12),
       children: [
         _infoSection(ds, l10n, l10n.aboutApp, {
@@ -2633,6 +2712,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           'privacy_url': 'https://pipstats.pages.dev/privacy',
         }),
       ],
+      ),
     );
   }
 
@@ -2968,33 +3048,4 @@ class _PlaceholderIcon extends StatelessWidget {
 }
 
 /// CRT scanline overlay for Pip-Boy aesthetic.
-class _Scanlines extends StatelessWidget {
-  const _Scanlines();
 
-  @override
-  Widget build(BuildContext context) {
-    return CustomPaint(
-      size: Size.infinite,
-      painter: _ScanlinePainter(context.ds.scanline),
-    );
-  }
-}
-
-class _ScanlinePainter extends CustomPainter {
-  _ScanlinePainter(this.scanline);
-
-  final Color scanline;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = scanline
-      ..strokeWidth = 1;
-    for (double y = 0; y < size.height; y += 3) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
-}
