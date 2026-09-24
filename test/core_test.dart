@@ -186,6 +186,43 @@ void main() {
     });
   });
 
+  group('chargeAtLevel', () {
+    // 4500 mAh design capacity, as read from power_profile.xml on the Seeker.
+    const cap = 4500000;
+
+    test('scales the trusted capacity by the level', () {
+      expect(chargeAtLevel(cap, 100, 100), 4500000);
+      expect(chargeAtLevel(cap, 67, 100), 3015000);
+      expect(chargeAtLevel(cap, 43, 100), 1935000);
+      expect(chargeAtLevel(cap, 0, 100), 0);
+    });
+
+    test('honours a scale other than 100', () {
+      // level is a fraction of scale, not a percentage: 50 of 200 is a quarter.
+      expect(chargeAtLevel(cap, 50, 200), 1125000);
+      expect(chargeAtLevel(cap, 100, 200), 2250000);
+      expect(chargeAtLevel(cap, 200, 200), 4500000);
+    });
+
+    test('never exceeds the capacity', () {
+      // A level above scale is nonsense but has been seen from OEM drivers;
+      // reporting more charge than the battery holds is worse than clamping.
+      expect(chargeAtLevel(cap, 150, 100), cap);
+    });
+
+    test('refuses rather than inventing a number', () {
+      expect(chargeAtLevel(-1, 50, 100), -1, reason: 'no capacity to scale');
+      expect(chargeAtLevel(cap, 50, 0), -1, reason: 'scale of zero');
+      expect(chargeAtLevel(cap, -1, 100), -1, reason: 'level unknown');
+    });
+
+    test('is exact at the levels the UI renders', () {
+      // The strip divides by 1000 and rounds; these must not drift by an mAh.
+      expect((chargeAtLevel(cap, 43, 100) / 1000).round(), 1935);
+      expect((chargeAtLevel(cap, 12, 100) / 1000).round(), 540);
+    });
+  });
+
   group('aggregateUsage', () {
     Map<String, Object?> ev(String pkg, int type, int ts) => {
       'package': pkg,

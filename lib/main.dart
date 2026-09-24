@@ -127,6 +127,21 @@ enum Period { day, week, month, all }
 
 enum SortKey { time, launches }
 
+/// Charge held in the battery, in µAh, at [level] out of [scale].
+///
+/// Returns -1 when the inputs cannot support an answer, so callers can fall
+/// back rather than render a confident wrong number.
+///
+/// [capacityUah] is the capacity to scale against — design capacity here, not
+/// the fuel gauge's own full reading. Kept pure and separate because every
+/// battery defect in this file so far has been a unit or scale mistake that
+/// looked right in the source.
+int chargeAtLevel(int capacityUah, int level, int scale) {
+  if (capacityUah <= 0 || level < 0 || scale <= 0) return -1;
+  if (level > scale) return capacityUah;
+  return (capacityUah * level / scale).round();
+}
+
 /// Pure comparator for usage rows: orders by foreground time or launches,
 /// ascending or descending. Extracted for testability.
 int compareUsageRows(
@@ -164,6 +179,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   int _batteryLevel = -1;
   bool _charging = false;
+  /// Charge currently in the battery, µAh. Recomputed on every sample so the
+  /// metrics strip tracks the level instead of showing a fixed number.
+  int _currentChargeUah = -1;
+
   int _capacityUah = -1;
   int _realCapacityUah = -1;
   int _designCapacityUah = -1;
@@ -436,6 +455,34 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
         }
         _prevChargeCounterUah = counter;
+      }
+
+      // Charge held right now, as a fraction of the capacity we trust.
+      //
+      // The fraction comes from level/scale rather than from the gauge's
+      // chargeCounter/chargeFull ratio: chargeFull is itself derived here as
+      // counter * scale / level, so that ratio reduces to the same number
+      // without adding precision.
+      //
+      // The absolute scale is the effective capacity (design, 4500 mAh on this
+      // device) rather than the gauge's own full reading, which reports 2946
+      // mAh for a cell with cycle_count 1 and no measured discharge.
+      // Level comes from _batteryLevel — the same value the CHARGE cell
+      // renders — so the two cells can never contradict each other. They are
+      // read through different paths (battery_plus vs the native battery
+      // intent) and were seen disagreeing outright under `dumpsys battery set
+      // level`: CHARGE said 100% while this showed 43% worth of mAh.
+      final charge = chargeAtLevel(
+        _effectiveCapacityUah,
+        _batteryLevel > 0
+            ? _batteryLevel
+            : (level is int && level > 0 ? level : -1),
+        scale is int && scale > 0 ? scale : 100,
+      );
+      if (charge > 0) {
+        _currentChargeUah = charge;
+      } else if (counter is int && counter > 0) {
+        _currentChargeUah = counter;
       }
 
       _batteryInfoAvailable = true;
@@ -1999,13 +2046,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           _metricBlock(l10n.uptime, _uptime.isEmpty ? '...' : _uptime),
           if (_batteryInfoAvailable) ...[
             SizedBox(width: 12),
-            // Only the total: the charge cell to the left already shows the
-            // level, so "2946 / 2946 mAh" was both redundant and a second line.
+            // Charge now over total, so the cell moves with the battery
+            // instead of showing one fixed number. FittedBox in _metricBlock
+            // shrinks it rather than wrapping to a second line.
             _metricBlock(
               l10n.batteryCapacity,
-              _effectiveCapacityUah > 0
-                  ? '${(_effectiveCapacityUah / 1000.0).round()} mAh'
-                  : '...',
+              _effectiveCapacityUah > 0 && _currentChargeUah > 0
+                  ? '${(_currentChargeUah / 1000.0).round()}'
+                      ' / ${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                  : _effectiveCapacityUah > 0
+                      ? '${(_effectiveCapacityUah / 1000.0).round()} mAh'
+                      : '...',
               onLongPress: _effectiveCapacityUah > 0 ? _showCalibrationDialog : null,
             ),
           ],
