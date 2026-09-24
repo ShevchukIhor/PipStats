@@ -15,6 +15,7 @@ import android.util.Log
 
 class ForegroundService : Service() {
 
+    private val TAG = "ForegroundService"
     private val CHANNEL_ID = "device_stats_foreground"
     private val NOTIFICATION_ID = 1001
     /** Wall-clock start, used as the chronometer base. 0 until first start. */
@@ -107,12 +108,29 @@ class ForegroundService : Service() {
         }
 
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        // Any startForeground can be refused — the system may deny a start
+        // from the background, and a refusal throws. Letting it propagate
+        // killed the app outright, which is how the dataSync time limit
+        // surfaced: a crash rather than a service that quietly stopped.
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            isRunning = true
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground refused: ${e.message}")
+            isRunning = false
+            stopSelf()
+            // Collection continues through the AlarmManager receiver, which
+            // reads UsageStatsManager retroactively and needs no service.
+            return START_NOT_STICKY
         }
-        isRunning = true
 
         return START_STICKY
     }

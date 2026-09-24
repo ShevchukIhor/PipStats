@@ -54,4 +54,32 @@ void main() {
       expect(c.debugScale, 500);
     });
   });
+  group('BatteryChart.hasVariation', () {
+    List<BatteryPoint> pts(List<int> counters) => [
+      for (var i = 0; i < counters.length; i++)
+        BatteryPoint(ts: i * 1000, counterUah: counters[i], charging: false),
+    ];
+
+    test('a phone left on the charger reads as flat', () {
+      // Perfectly straight traces look like a broken widget, so callers show
+      // a line of text instead of drawing one.
+      final c = BatteryChart(points: pts([3000000, 3000000, 3000000]), capacityUah: 3000000);
+      expect(c.hasVariation, isFalse);
+    });
+
+    test('noise below half a percent of the axis is still flat', () {
+      final c = BatteryChart(points: pts([3000000, 3001000]), capacityUah: 3000000);
+      expect(c.hasVariation, isFalse);
+    });
+
+    test('a real discharge is not flat', () {
+      final c = BatteryChart(points: pts([3000000, 2700000]), capacityUah: 3000000);
+      expect(c.hasVariation, isTrue);
+    });
+
+    test('fewer than two points has nothing to vary', () {
+      expect(BatteryChart(points: pts([3000000]), capacityUah: 3000000).hasVariation, isFalse);
+      expect(BatteryChart(points: const [], capacityUah: 3000000).hasVariation, isFalse);
+    });
+  });
 }

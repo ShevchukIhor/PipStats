@@ -547,4 +547,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String revokeAllDone(int count) {
     return 'Відкликано дозволів: $count';
   }
+
+  @override
+  String get batteryChartFlat => 'БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ';
 }

@@ -545,4 +545,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String revokeAllDone(int count) {
     return 'Revoked $count approvals';
   }
+
+  @override
+  String get batteryChartFlat => 'NO CHANGE — ON CHARGER OR IDLE';
 }

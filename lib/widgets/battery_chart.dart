@@ -67,6 +67,25 @@ class BatteryChart extends StatelessWidget {
   @visibleForTesting
   int get debugScale => _scale;
 
+  /// Whether the samples actually vary.
+  ///
+  /// A phone left on the charger produces a perfectly straight line, which
+  /// looks like a broken chart rather than the "nothing happened" it means.
+  /// Callers use this to show a one-line note instead of drawing it.
+  bool get hasVariation {
+    if (points.length < 2) return false;
+    var lo = points.first.counterUah;
+    var hi = lo;
+    for (final p in points) {
+      if (p.counterUah < lo) lo = p.counterUah;
+      if (p.counterUah > hi) hi = p.counterUah;
+    }
+    final scale = _scale;
+    if (scale <= 0) return false;
+    // Half a percent of the axis: below that the line is visually flat anyway.
+    return (hi - lo) / scale > 0.005;
+  }
+
   int get _scale {
     var maxSeen = 0;
     for (final p in points) {

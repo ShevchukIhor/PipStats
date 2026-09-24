@@ -979,6 +979,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Revoked {count} approvals'**
   String revokeAllDone(int count);
+
+  /// No description provided for @batteryChartFlat.
+  ///
+  /// In en, this message translates to:
+  /// **'NO CHANGE — ON CHARGER OR IDLE'**
+  String get batteryChartFlat;
 }
 
 class _AppLocalizationsDelegate

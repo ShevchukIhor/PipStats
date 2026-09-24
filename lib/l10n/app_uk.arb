@@ -188,5 +188,6 @@
   },
   "@revokeAllDone": {
     "placeholders": { "count": { "type": "int" } }
-  }
+  },
+  "batteryChartFlat": "БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ"
 }

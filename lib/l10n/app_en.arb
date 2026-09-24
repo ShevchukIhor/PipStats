@@ -214,5 +214,6 @@
   },
   "@revokeAllDone": {
     "placeholders": { "count": { "type": "int" } }
-  }
+  },
+  "batteryChartFlat": "NO CHANGE — ON CHARGER OR IDLE"
 }

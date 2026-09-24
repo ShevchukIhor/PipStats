@@ -283,6 +283,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Samples backing the battery chart, for the period on screen.
   List<BatteryPoint> _batteryPoints = const [];
+
+  /// Whether the battery section is expanded. Remembered like the other view
+  /// preferences, so a collapsed chart stays collapsed across restarts.
+  bool _batteryExpanded = true;
   final _searchController = TextEditingController();
 
   /// [_rows] narrowed by [_appQuery].
@@ -398,6 +402,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final calibrated = await StatsDb.instance.getMeta('battery_calibrated_capacity_uah');
     if (calibrated != null) {
       _calibratedCapacityUah = int.tryParse(calibrated) ?? -1;
+    }
+    {
+      final v = await StatsDb.instance.getMeta('battery_chart_expanded');
+      if (v != null) _batteryExpanded = v == '1';
     }
     // Load vault data from database if wallet is connected.
     if (_walletAddress != null) {
@@ -2660,36 +2668,77 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            l10n.batteryChartTitle,
-            style: TextStyle(
-              color: ds.dim,
-              fontSize: PipText.note,
-              letterSpacing: 1,
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              setState(() => _batteryExpanded = !_batteryExpanded);
+              StatsDb.instance.setMeta(
+                'battery_chart_expanded',
+                _batteryExpanded ? '1' : '0',
+              );
+            },
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  Text(
+                    l10n.batteryChartTitle,
+                    style: TextStyle(
+                      color: ds.dim,
+                      fontSize: PipText.note,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  SizedBox(width: 6),
+                  Icon(
+                    _batteryExpanded ? Icons.expand_less : Icons.expand_more,
+                    color: ds.dim,
+                    size: 20,
+                  ),
+                ],
+              ),
             ),
           ),
           SizedBox(height: 4),
-          if (_batteryPoints.length < 2)
-            Container(
-              height: 60,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                border: Border.all(color: ds.dark),
-              ),
-              child: Text(
-                l10n.batteryChartEmpty,
-                style: TextStyle(
-                  color: ds.dim,
-                  fontSize: PipText.note,
-                  letterSpacing: 1,
-                ),
-              ),
-            )
-          else
-            BatteryChart(points: _batteryPoints, capacityUah: capacity),
+          if (_batteryExpanded) _batteryBody(ds, l10n, capacity),
         ],
       ),
     );
+  }
+
+  /// The chart itself, or a one-line note explaining why there is none.
+  ///
+  /// A flat line is drawn as text rather than as a chart: a phone that sat on
+  /// the charger produces a perfectly straight trace, which reads as a broken
+  /// widget instead of as "nothing happened".
+  Widget _batteryBody(
+    DeviceStatsColors ds,
+    AppLocalizations l10n,
+    int capacity,
+  ) {
+    final chart = BatteryChart(
+      points: _batteryPoints,
+      capacityUah: capacity,
+    );
+    if (_batteryPoints.length < 2 || !chart.hasVariation) {
+      return Container(
+        height: 44,
+        alignment: Alignment.centerLeft,
+        padding: EdgeInsets.symmetric(horizontal: 10),
+        decoration: BoxDecoration(border: Border.all(color: ds.dark)),
+        child: Text(
+          _batteryPoints.length < 2
+              ? l10n.batteryChartEmpty
+              : l10n.batteryChartFlat,
+          style: TextStyle(
+            color: ds.dim,
+            fontSize: PipText.note,
+            letterSpacing: 1,
+          ),
+        ),
+      );
+    }
+    return chart;
   }
 
   Widget _searchField() {
