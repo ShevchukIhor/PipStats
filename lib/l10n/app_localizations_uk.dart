@@ -483,4 +483,25 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get monitoringEnableNotif => 'УВІМКНУТИ';
+
+  @override
+  String get appCharging => 'ЗАРЯДЖАЄТЬСЯ';
+
+  @override
+  String appScreenShare(String pct) {
+    return '$pct% ЕКРАНУ';
+  }
+
+  @override
+  String appDrainEstimate(String mah) {
+    return '~$mah mAh';
+  }
+
+  @override
+  String get appDrainMeasuring => 'ВИМІРЮВАННЯ';
+
+  @override
+  String periodDrainTotal(String mah) {
+    return 'РОЗРЯДЖЕНО ЗА ПЕРІОД: $mah mAh';
+  }
 }

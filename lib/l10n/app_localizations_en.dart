@@ -481,4 +481,25 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get monitoringEnableNotif => 'ENABLE';
+
+  @override
+  String get appCharging => 'CHARGING';
+
+  @override
+  String appScreenShare(String pct) {
+    return '$pct% SCREEN';
+  }
+
+  @override
+  String appDrainEstimate(String mah) {
+    return '~$mah mAh';
+  }
+
+  @override
+  String get appDrainMeasuring => 'MEASURING';
+
+  @override
+  String periodDrainTotal(String mah) {
+    return 'DISCHARGED THIS PERIOD: $mah mAh';
+  }
 }

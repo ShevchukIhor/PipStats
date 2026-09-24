@@ -174,5 +174,19 @@
   "monitoringBatteryOpt": "Android power management may kill background collection on this device.",
   "monitoringAllow": "ALLOW",
   "monitoringNoNotif": "Notifications are blocked, so the monitoring notification cannot be shown.",
-  "monitoringEnableNotif": "ENABLE"
+  "monitoringEnableNotif": "ENABLE",
+  "appCharging": "CHARGING",
+  "appScreenShare": "{pct}% SCREEN",
+  "appDrainEstimate": "~{mah} mAh",
+  "appDrainMeasuring": "MEASURING",
+  "periodDrainTotal": "DISCHARGED THIS PERIOD: {mah} mAh",
+  "@appScreenShare": {
+    "placeholders": { "pct": { "type": "String" } }
+  },
+  "@appDrainEstimate": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "@periodDrainTotal": {
+    "placeholders": { "mah": { "type": "String" } }
+  }
 }

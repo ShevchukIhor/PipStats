@@ -148,5 +148,19 @@
   "monitoringBatteryOpt": "Керування живленням Android може вбивати фоновий збір на цьому пристрої.",
   "monitoringAllow": "ДОЗВОЛИТИ",
   "monitoringNoNotif": "Сповіщення заблоковані, тож сповіщення моніторингу не показується.",
-  "monitoringEnableNotif": "УВІМКНУТИ"
+  "monitoringEnableNotif": "УВІМКНУТИ",
+  "appCharging": "ЗАРЯДЖАЄТЬСЯ",
+  "appScreenShare": "{pct}% ЕКРАНУ",
+  "appDrainEstimate": "~{mah} mAh",
+  "appDrainMeasuring": "ВИМІРЮВАННЯ",
+  "periodDrainTotal": "РОЗРЯДЖЕНО ЗА ПЕРІОД: {mah} mAh",
+  "@appScreenShare": {
+    "placeholders": { "pct": { "type": "String" } }
+  },
+  "@appDrainEstimate": {
+    "placeholders": { "mah": { "type": "String" } }
+  },
+  "@periodDrainTotal": {
+    "placeholders": { "mah": { "type": "String" } }
+  }
 }

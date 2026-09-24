@@ -127,6 +127,36 @@ enum Period { day, week, month, all }
 
 enum SortKey { time, launches }
 
+/// Charge discharged across [samples], in µAh.
+///
+/// Sums only the drops between consecutive samples. A plain first-minus-last
+/// would be wrong whenever the phone charged during the period: the counter
+/// climbs back up and cancels out real earlier drain. Pairs where either
+/// sample was taken on charger are skipped for the same reason.
+///
+/// Returns -1 when there is not enough history to measure anything, so the UI
+/// can say so instead of showing a confident 0.
+int drainBetween(List<Map<String, Object?>> samples) {
+  if (samples.length < 2) return -1;
+  var total = 0;
+  var pairs = 0;
+  for (var i = 1; i < samples.length; i++) {
+    final prev = samples[i - 1];
+    final cur = samples[i];
+    if ((cur['charging'] as int? ?? 0) == 1 ||
+        (prev['charging'] as int? ?? 0) == 1) {
+      continue;
+    }
+    final a = prev['counter_uah'] as int? ?? 0;
+    final b = cur['counter_uah'] as int? ?? 0;
+    if (a <= 0 || b <= 0) continue;
+    pairs++;
+    if (a > b) total += a - b;
+  }
+  if (pairs == 0) return -1;
+  return total;
+}
+
 /// Charge held in the battery, in µAh, at [level] out of [scale].
 ///
 /// Returns -1 when the inputs cannot support an answer, so callers can fall
@@ -195,8 +225,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _syncing = false;
   bool _shortHistory = false;
   int _totalFgMs = 0;
-  int _totalDrainUah = -1;
-  int _prevChargeCounterUah = -1;
+  /// Discharge measured across the displayed period, µAh; -1 when there is
+  /// not enough sample history yet to say.
+  int _periodDrainUah = -1;
   final Map<String, String> _iconCache = {};
   final Map<String, String> _appLabels = {};
   SortKey _sortKey = SortKey.time;
@@ -448,13 +479,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
 
       if (counter is int && counter > 0) {
-        if (_prevChargeCounterUah > 0) {
-          final delta = _prevChargeCounterUah - counter;
-          if (delta > 0) {
-            _totalDrainUah = delta;
-          }
-        }
-        _prevChargeCounterUah = counter;
+        // Persist the sample. StatsDb has carried this table and its queries
+        // from the start, but nothing ever wrote to it, so per-app drain had
+        // no measured discharge to work from.
+        final currentUa = info['currentNowUa'];
+        await StatsDb.instance.insertBatterySample(
+          DateTime.now().millisecondsSinceEpoch,
+          counter,
+          currentUa is int ? currentUa : 0,
+          _charging,
+        );
       }
 
       // Charge held right now, as a fraction of the capacity we trust.
@@ -582,16 +616,31 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     for (final r in appList) {
       _totalFgMs += (r['fg_ms'] as int?) ?? 0;
     }
-    final capacityForEstimate = _effectiveCapacityUah;
+    // Real discharge measured over the displayed period, apportioned by each
+    // app's share of foreground time.
+    //
+    // This used to be `effectiveCapacity * share`: an app with half the screen
+    // time was credited with half the battery's entire 4500 mAh, whatever the
+    // phone had actually discharged — often nothing at all. That number was
+    // unrelated to consumption by construction.
+    //
+    // It is still an estimate, and a crude one: Android exposes no per-app
+    // power attribution to ordinary apps (BatteryStats needs DUMP), so screen
+    // time is the only weighting available. What changed is that the total
+    // being divided up is now a measurement rather than a constant.
+    _periodDrainUah = drainBetween(
+      await StatsDb.instance.batterySamplesBetween(
+        _periodStartMs(),
+        DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
     for (final r in appList) {
       final fg = (r['fg_ms'] as int?) ?? 0;
       final share = _totalFgMs > 0 ? fg / _totalFgMs : 0.0;
-      r['drain_pct'] = share * 100.0;
-      if (capacityForEstimate > 0) {
-        r['drain_mah'] = (capacityForEstimate * share) / 1000.0;
-      } else {
-        r['drain_mah'] = (_totalDrainUah * share) / 1000.0;
-      }
+      r['screen_pct'] = share * 100.0;
+      r['drain_mah'] = _periodDrainUah > 0
+          ? (_periodDrainUah * share) / 1000.0
+          : null;
     }
     var shortHistory = false;
     if (_period != Period.day && appList.isNotEmpty) {
@@ -746,6 +795,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   SizedBox(height: 12),
                   if (!_hasAccess) _accessHint(),
                   if (_hasAccess) _sortHeader(),
+                  if (_hasAccess) _periodDrainLine(),
                   Expanded(
                     child: _rows.isEmpty
                         ? Center(
@@ -2254,6 +2304,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   // ---- Sort header ----
+  /// The measured discharge the per-app figures are shares of.
+  ///
+  /// Shown so the estimates can be checked: they divide up this number and
+  /// nothing else. Hidden until there is enough sample history, rather than
+  /// rendering a zero that would read as a measurement.
+  Widget _periodDrainLine() {
+    if (_periodDrainUah <= 0) return const SizedBox.shrink();
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 2, 12, 0),
+      child: Text(
+        l10n.periodDrainTotal((_periodDrainUah / 1000).toStringAsFixed(0)),
+        style: TextStyle(color: ds.dim, fontSize: PipText.note),
+      ),
+    );
+  }
+
   Widget _sortHeader() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
@@ -2317,6 +2385,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // ---- App list ----
   Widget _appList() {
     final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
     return ListView.builder(
       itemCount: _rows.length,
       itemBuilder: (ctx, i) {
@@ -2374,46 +2443,39 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 SizedBox(height: 3),
                 _usageBar(r['fg_ms'] as int),
                 SizedBox(height: 3),
-                if (_batteryInfoAvailable) ...[
-                  if (_charging) ...[
-                    Row(
-                      children: [
-                        Icon(Icons.flash_on, color: ds.battery, size: 16),
-                        SizedBox(width: 8),
-                        Text(
-                          'CHARGING',
+                // One line, not a second bar. The amber bar drew
+                // drain_pct/100 — the very same fraction the green usage bar
+                // already draws — so the two were always identical in width
+                // and carried one piece of information between them.
+                if (_batteryInfoAvailable &&
+                    (r['screen_pct'] as num?) != null &&
+                    (r['screen_pct'] as num) > 0) ...[
+                  Row(
+                    children: [
+                      Icon(
+                        _charging ? Icons.flash_on : Icons.battery_std,
+                        color: ds.battery,
+                        size: 16,
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _drainLabel(
+                            l10n,
+                            (r['screen_pct'] as num).toDouble(),
+                            (r['drain_mah'] as num?)?.toDouble(),
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: ds.battery,
                             fontSize: PipText.body,
                             letterSpacing: 1,
-                            fontWeight: FontWeight.bold,
                           ),
                         ),
-                      ],
-                    ),
-                  ] else ...[
-                    if ((r['drain_pct'] as num?) != null && (r['drain_pct'] as num) > 0) ...[
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _batteryBar((r['drain_pct'] as num).toDouble()),
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            _drainLabel(
-                              (r['drain_pct'] as num).toDouble(),
-                              (r['drain_mah'] as num).toDouble(),
-                            ),
-                            style: TextStyle(
-                              color: ds.battery,
-                              fontSize: PipText.body,
-                              letterSpacing: 1,
-                            ),
-                          ),
-                        ],
                       ),
                     ],
-                  ],
+                  ),
                 ],
               ],
             ),
@@ -2451,27 +2513,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
-  /// Proportional amber battery drain bar for a row relative to total drain.
-  Widget _batteryBar(double pct) {
-    final ds = context.ds;
-    final frac = (pct / 100.0).clamp(0.0, 1.0);
-    return Container(
-      height: 6,
-      decoration: BoxDecoration(
-        color: ds.dark,
-        border: Border.all(color: ds.dark, width: 1),
-      ),
-      alignment: Alignment.centerLeft,
-      child: FractionallySizedBox(
-        widthFactor: frac,
-        child: Container(color: ds.battery),
-      ),
-    );
-  }
 
-  /// Formats the drain percentage and mAh into a label string.
-  String _drainLabel(double pct, double mah) {
-    return '${pct.toStringAsFixed(1)}% · ${mah.toStringAsFixed(0)} mAh';
+  /// The line under a row: share of screen time, and the share of measured
+  /// discharge attributed to it.
+  ///
+  /// The mAh figure carries a tilde and is absent entirely until real
+  /// discharge has been measured, rather than showing a confident zero. On
+  /// charger there is nothing to attribute, so it says that instead.
+  String _drainLabel(AppLocalizations l10n, double screenPct, double? mah) {
+    final share = l10n.appScreenShare(screenPct.toStringAsFixed(1));
+    if (_charging) return '$share · ${l10n.appCharging}';
+    if (mah == null || mah <= 0) {
+      return '$share · ${l10n.appDrainMeasuring}';
+    }
+    return '$share · ${l10n.appDrainEstimate(mah.toStringAsFixed(0))}';
   }
 
   // ---- SysInfo tab (device technical details) ----

@@ -186,6 +186,61 @@ void main() {
     });
   });
 
+  group('drainBetween', () {
+    Map<String, Object?> s(int ts, int counter, {bool charging = false}) => {
+      'ts': ts,
+      'counter_uah': counter,
+      'charging': charging ? 1 : 0,
+    };
+
+    test('sums the drops between consecutive samples', () {
+      expect(
+        drainBetween([s(1, 3000000), s(2, 2900000), s(3, 2750000)]),
+        250000,
+      );
+    });
+
+    test('a charge in the middle does not cancel earlier drain', () {
+      // First-minus-last would report 0 here and hide 200000 µAh of real use.
+      final out = drainBetween([
+        s(1, 3000000),
+        s(2, 2800000),
+        s(3, 3000000),
+      ]);
+      expect(out, 200000);
+    });
+
+    test('ignores pairs recorded on charger', () {
+      expect(
+        drainBetween([
+          s(1, 3000000, charging: true),
+          s(2, 2500000, charging: true),
+          s(3, 2400000),
+        ]),
+        isNot(500000),
+        reason: 'a counter falling while plugged in is not app consumption',
+      );
+    });
+
+    test('says it does not know rather than reporting zero', () {
+      expect(drainBetween([]), -1);
+      expect(drainBetween([s(1, 3000000)]), -1, reason: 'one sample');
+      expect(
+        drainBetween([s(1, 3000000, charging: true), s(2, 2900000, charging: true)]),
+        -1,
+        reason: 'every pair was on charger, so nothing was measured',
+      );
+    });
+
+    test('a flat counter is a real zero, not unknown', () {
+      expect(drainBetween([s(1, 3000000), s(2, 3000000)]), 0);
+    });
+
+    test('skips samples with no counter reading', () {
+      expect(drainBetween([s(1, 0), s(2, 0)]), -1);
+    });
+  });
+
   group('chargeAtLevel', () {
     // 4500 mAh design capacity, as read from power_profile.xml on the Seeker.
     const cap = 4500000;

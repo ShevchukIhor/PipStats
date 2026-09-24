@@ -883,6 +883,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'ENABLE'**
   String get monitoringEnableNotif;
+
+  /// No description provided for @appCharging.
+  ///
+  /// In en, this message translates to:
+  /// **'CHARGING'**
+  String get appCharging;
+
+  /// No description provided for @appScreenShare.
+  ///
+  /// In en, this message translates to:
+  /// **'{pct}% SCREEN'**
+  String appScreenShare(String pct);
+
+  /// No description provided for @appDrainEstimate.
+  ///
+  /// In en, this message translates to:
+  /// **'~{mah} mAh'**
+  String appDrainEstimate(String mah);
+
+  /// No description provided for @appDrainMeasuring.
+  ///
+  /// In en, this message translates to:
+  /// **'MEASURING'**
+  String get appDrainMeasuring;
+
+  /// No description provided for @periodDrainTotal.
+  ///
+  /// In en, this message translates to:
+  /// **'DISCHARGED THIS PERIOD: {mah} mAh'**
+  String periodDrainTotal(String mah);
 }
 
 class _AppLocalizationsDelegate
