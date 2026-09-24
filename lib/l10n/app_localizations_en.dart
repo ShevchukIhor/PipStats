@@ -548,4 +548,26 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get batteryChartFlat => 'NO CHANGE — ON CHARGER OR IDLE';
+
+  @override
+  String get approvalAlarmTitle => '! TOKEN SPENDING APPROVALS';
+
+  @override
+  String approvalAlarmBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString token accounts have active delegates',
+      one: '1 token account has an active delegate',
+    );
+    return '$_temp0 that can move those tokens without asking again.';
+  }
+
+  @override
+  String get approvalAlarmAction => 'REVIEW';
 }

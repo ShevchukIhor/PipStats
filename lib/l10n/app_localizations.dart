@@ -985,6 +985,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'NO CHANGE — ON CHARGER OR IDLE'**
   String get batteryChartFlat;
+
+  /// No description provided for @approvalAlarmTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'! TOKEN SPENDING APPROVALS'**
+  String get approvalAlarmTitle;
+
+  /// No description provided for @approvalAlarmBody.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can move those tokens without asking again.'**
+  String approvalAlarmBody(num count);
+
+  /// No description provided for @approvalAlarmAction.
+  ///
+  /// In en, this message translates to:
+  /// **'REVIEW'**
+  String get approvalAlarmAction;
 }
 
 class _AppLocalizationsDelegate

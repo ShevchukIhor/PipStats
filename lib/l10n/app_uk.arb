@@ -189,5 +189,11 @@
   "@revokeAllDone": {
     "placeholders": { "count": { "type": "int" } }
   },
-  "batteryChartFlat": "БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ"
+  "batteryChartFlat": "БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ",
+  "approvalAlarmTitle": "! ДОЗВОЛИ НА ВИТРАТУ ТОКЕНІВ",
+  "approvalAlarmBody": "{count, plural, =1{1 токен-акаунт має активного делегата} few{{count} токен-акаунти мають активних делегатів} other{{count} токен-акаунтів мають активних делегатів}}, який може переміщати ці токени без повторного запиту.",
+  "approvalAlarmAction": "ПЕРЕГЛЯНУТИ",
+  "@approvalAlarmBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  }
 }

@@ -386,6 +386,43 @@ void main() {
     });
   });
 
+  group('approval alarm condition', () {
+    TokenAccountInfo acct({String? delegate}) => TokenAccountInfo(
+      mint: 'm',
+      owner: 'o',
+      amount: 1,
+      delegate: delegate,
+      state: 1,
+      delegatedAmount: delegate == null ? 0 : 5,
+      closeAuthority: null,
+      isNative: false,
+      nativeAmount: 0,
+    );
+
+    test('accounts without delegates are not approvals', () {
+      // Holding token accounts is not the same as having granted anything;
+      // this distinction was already got wrong once in the vault list.
+      expect(delegatedAccounts([acct(), acct()]), isEmpty);
+      expect(shouldWarnAboutApprovals('wallet', [acct(), acct()]), isFalse);
+    });
+
+    test('warns when any account has a delegate', () {
+      final accounts = [acct(), acct(delegate: 'spender')];
+      expect(delegatedAccounts(accounts), hasLength(1));
+      expect(shouldWarnAboutApprovals('wallet', accounts), isTrue);
+    });
+
+    test('stays silent with no wallet connected', () {
+      // No address means the scan never ran; an empty result is "unknown",
+      // not "safe", and a warning either way would be noise.
+      expect(shouldWarnAboutApprovals(null, [acct(delegate: 'x')]), isFalse);
+    });
+
+    test('stays silent with nothing scanned', () {
+      expect(shouldWarnAboutApprovals('wallet', const []), isFalse);
+    });
+  });
+
   group('chargeAtLevel', () {
     // 4500 mAh design capacity, as read from power_profile.xml on the Seeker.
     const cap = 4500000;

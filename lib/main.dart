@@ -182,6 +182,24 @@ String buildCsv(List<String> header, List<List<Object?>> rows) {
   return buffer.toString();
 }
 
+/// Token accounts that currently have a delegate set.
+///
+/// Having token accounts is not the same as having approvals: this exact
+/// distinction was already got wrong once here, where a wallet with accounts
+/// but no delegates rendered an empty list instead of saying there were none.
+List<TokenAccountInfo> delegatedAccounts(List<TokenAccountInfo> accounts) =>
+    accounts.where((a) => a.hasDelegate).toList();
+
+/// Whether the home screen should warn about live token approvals.
+///
+/// Requires a connected wallet: with no address the scan never ran, and an
+/// empty result means "unknown", not "safe".
+bool shouldWarnAboutApprovals(
+  String? walletAddress,
+  List<TokenAccountInfo> accounts,
+) =>
+    walletAddress != null && delegatedAccounts(accounts).isNotEmpty;
+
 /// Charge discharged across [samples], in µAh.
 ///
 /// Sums only the drops between consecutive samples. A plain first-minus-last
@@ -309,6 +327,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   // Vault / on-chain state
   int _tab = 0; // 0 = SYSTEM, 1 = VAULT, 2 = SYSINFO, 3 = INFO
   int _vaultSection = 0; // 0 = tokens, 1 = nfts, 2 = tx, 3 = delegations
+
+  /// Briefly true after the home-screen alarm navigates here, to show where
+  /// the jump landed.
+  bool _highlightDelegTab = false;
   Future<Map?>? _deviceInfoFuture;
   final TextEditingController _addressController = TextEditingController();
   String? _walletAddress;
@@ -945,6 +967,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 _monitoringBanner(),
+                                _approvalAlarm(),
                                 _metricsRow(),
                                 _screenTimeBar(),
                                 _batterySection(),
@@ -1310,15 +1333,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget _vaultTabButton(String label, int idx) {
     final ds = context.ds;
     final active = _vaultSection == idx;
+    final flash = idx == 3 && _highlightDelegTab;
     return Expanded(
       child: GestureDetector(
         onTap: () => setState(() => _vaultSection = idx),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 400),
           padding: EdgeInsets.symmetric(vertical: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: active ? ds.primary : Colors.transparent,
-            border: Border.all(color: ds.primary, width: 1),
+            border: Border.all(
+              color: flash ? ds.dangerBorder : ds.primary,
+              width: flash ? 3 : 1,
+            ),
           ),
           child: Text(
             label,
@@ -1688,7 +1716,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Token accounts with an active delegate — the approvals a user should
   /// review and revoke.
   List<TokenAccountInfo> get _delegatedAccounts =>
-      _tokenAccounts.where((t) => t.hasDelegate).toList();
+      delegatedAccounts(_tokenAccounts);
 
   /// Prominent warning that approvals exist. Listing them further down is not
   /// enough: an approval lets a third party move tokens without asking again,
@@ -2279,6 +2307,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _walletAddress = auth.address;
         _walletLabel = auth.accountLabel;
       });
+      unawaited(_scanApprovals());
+    }
+  }
+
+  /// Scans for active token approvals so the home screen can warn about them.
+  ///
+  /// Deliberately lighter than [_loadVaultData], which makes four calls: the
+  /// alarm only needs the delegate scan, and it has to run without the user
+  /// opening the vault. Until this existed, approvals were only discovered by
+  /// someone who already went looking — which is the one case where a warning
+  /// is not needed.
+  ///
+  /// Failures are silent: an unreachable RPC at launch is not worth an error
+  /// banner, and the vault reports properly when opened.
+  Future<void> _scanApprovals() async {
+    final addr = _walletAddress;
+    if (addr == null) return;
+    try {
+      final accounts = await SolScanService.instance.scanDelegates(addr);
+      if (!mounted) return;
+      setState(() => _tokenAccounts = accounts);
+    } catch (e) {
+      log('_scanApprovals error: $e');
     }
   }
 
@@ -2290,6 +2341,92 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// at all, or it is running but the OEM power manager is free to kill it.
   /// Nothing is drawn when both are fine — a permanent nag trains people to
   /// ignore the one time it matters.
+  /// Home-screen warning that the connected wallet has live token approvals.
+  ///
+  /// An approval lets a delegate move those tokens again at any time without
+  /// a further prompt, so it belongs where the user actually looks rather than
+  /// on a tab they have to think to open. Tapping it lands on the list.
+  ///
+  /// Not dismissible: it disappears when the approvals do. A security warning
+  /// that can be swiped away is one people learn to swipe away.
+  Widget _approvalAlarm() {
+    if (!shouldWarnAboutApprovals(_walletAddress, _tokenAccounts)) {
+      return const SizedBox.shrink();
+    }
+    final count = _delegatedAccounts.length;
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _goToApprovals,
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: ds.dangerBg,
+            border: Border.all(color: ds.dangerBorder, width: 1),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                l10n.approvalAlarmTitle,
+                style: TextStyle(
+                  color: ds.dangerTextStrong,
+                  fontSize: PipText.note,
+                  letterSpacing: 1,
+                ),
+              ),
+              SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l10n.approvalAlarmBody(count),
+                      style: TextStyle(
+                        color: ds.dangerText,
+                        fontSize: PipText.note,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    l10n.approvalAlarmAction,
+                    style: TextStyle(
+                      color: ds.dangerTextStrong,
+                      fontSize: PipText.note,
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right,
+                    color: ds.dangerTextStrong,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Jumps straight to the approvals list and flashes the sub-tab, so the
+  /// route from the warning to the detail is visible rather than guessed at.
+  void _goToApprovals() {
+    setState(() {
+      _tab = 1;
+      _vaultSection = 3;
+      _highlightDelegTab = true;
+    });
+    Future.delayed(const Duration(milliseconds: 2200), () {
+      if (mounted) setState(() => _highlightDelegTab = false);
+    });
+  }
+
   Widget _monitoringBanner() {
     final l10n = AppLocalizations.of(context);
     final ds = context.ds;

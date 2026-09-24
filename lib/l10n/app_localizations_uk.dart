@@ -550,4 +550,27 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get batteryChartFlat => 'БЕЗ ЗМІН — НА ЗАРЯДЦІ АБО ПРОСТІЙ';
+
+  @override
+  String get approvalAlarmTitle => '! ДОЗВОЛИ НА ВИТРАТУ ТОКЕНІВ';
+
+  @override
+  String approvalAlarmBody(num count) {
+    final intl.NumberFormat countNumberFormat = intl.NumberFormat.compact(
+      locale: localeName,
+    );
+    final String countString = countNumberFormat.format(count);
+
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$countString токен-акаунтів мають активних делегатів',
+      few: '$countString токен-акаунти мають активних делегатів',
+      one: '1 токен-акаунт має активного делегата',
+    );
+    return '$_temp0, який може переміщати ці токени без повторного запиту.';
+  }
+
+  @override
+  String get approvalAlarmAction => 'ПЕРЕГЛЯНУТИ';
 }

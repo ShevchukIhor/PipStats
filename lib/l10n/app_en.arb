@@ -215,5 +215,11 @@
   "@revokeAllDone": {
     "placeholders": { "count": { "type": "int" } }
   },
-  "batteryChartFlat": "NO CHANGE — ON CHARGER OR IDLE"
+  "batteryChartFlat": "NO CHANGE — ON CHARGER OR IDLE",
+  "approvalAlarmTitle": "! TOKEN SPENDING APPROVALS",
+  "approvalAlarmBody": "{count, plural, =1{1 token account has an active delegate} other{{count} token accounts have active delegates}} that can move those tokens without asking again.",
+  "approvalAlarmAction": "REVIEW",
+  "@approvalAlarmBody": {
+    "placeholders": { "count": { "type": "num", "format": "compact" } }
+  }
 }
