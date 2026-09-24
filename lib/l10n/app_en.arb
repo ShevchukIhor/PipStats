@@ -196,5 +196,11 @@
     "placeholders": { "name": { "type": "String" } }
   },
   "searchHint": "FILTER APPS",
-  "searchNoMatch": "NO MATCHES"
+  "searchNoMatch": "NO MATCHES",
+  "batteryChartTitle": "BATTERY",
+  "batteryChartEmpty": "COLLECTING SAMPLES",
+  "netUsage": "{down} down · {up} up",
+  "@netUsage": {
+    "placeholders": { "down": { "type": "String" }, "up": { "type": "String" } }
+  }
 }

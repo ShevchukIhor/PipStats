@@ -170,5 +170,11 @@
     "placeholders": { "name": { "type": "String" } }
   },
   "searchHint": "ФІЛЬТР ЗАСТОСУНКІВ",
-  "searchNoMatch": "НЕМАЄ ЗБІГІВ"
+  "searchNoMatch": "НЕМАЄ ЗБІГІВ",
+  "batteryChartTitle": "БАТАРЕЯ",
+  "batteryChartEmpty": "ЗБИРАЄМО ЗАМІРИ",
+  "netUsage": "{down} вх · {up} вих",
+  "@netUsage": {
+    "placeholders": { "down": { "type": "String" }, "up": { "type": "String" } }
+  }
 }

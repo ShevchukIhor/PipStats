@@ -104,6 +104,24 @@ class StatsService {
     }
   }
 
+  /// Per-package network bytes since [sinceMs].
+  ///
+  /// Each entry has `package`, `rx_bytes` and `tx_bytes`. Empty when usage
+  /// access has not been granted — the same grant this app already needs for
+  /// usage events, so no extra prompt is involved.
+  static Future<List<Map<String, Object?>>> networkUsage(int sinceMs) async {
+    try {
+      final rows = await _channel.invokeListMethod<Map>('networkUsage', {
+        'since': sinceMs,
+      });
+      if (rows == null) return const [];
+      return rows.map((r) => Map<String, Object?>.from(r)).toList();
+    } catch (e) {
+      log('networkUsage error: $e');
+      return const [];
+    }
+  }
+
   /// Writes [content] into the shared Downloads folder.
   ///
   /// Returns the file name it actually landed under — MediaStore renames on

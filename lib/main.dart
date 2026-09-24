@@ -13,6 +13,7 @@ import 'domains.dart';
 import 'wallet_auth.dart';
 import 'revoke.dart';
 import 'theme.dart';
+import 'widgets/battery_chart.dart';
 import 'widgets/boot_sequence.dart';
 import 'widgets/crt_overlay.dart';
 import 'l10n/app_localizations.dart';
@@ -126,6 +127,22 @@ class _DeviceStatsAppState extends State<DeviceStatsApp> {
 enum Period { day, week, month, all }
 
 enum SortKey { time, launches }
+
+/// Formats a byte count for display.
+///
+/// Uses SI units, matching how carriers and Android settings report data, so
+/// the number lines up with what the user sees elsewhere.
+String formatBytes(int bytes) {
+  if (bytes < 1000) return '$bytes B';
+  const units = ['kB', 'MB', 'GB', 'TB'];
+  var value = bytes / 1000;
+  var unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return '${value.toStringAsFixed(value >= 100 ? 0 : 1)} ${units[unit]}';
+}
 
 /// Rows whose label or package matches [query], case-insensitively.
 ///
@@ -263,6 +280,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Live filter over [_rows]. Kept out of the query so typing never hits the
   /// database or disturbs the totals the percentages are computed against.
   String _appQuery = '';
+
+  /// Samples backing the battery chart, for the period on screen.
+  List<BatteryPoint> _batteryPoints = const [];
   final _searchController = TextEditingController();
 
   /// [_rows] narrowed by [_appQuery].
@@ -462,6 +482,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         'launches',
         'screen_pct',
         'drain_mah_estimate',
+        'rx_bytes',
+        'tx_bytes',
       ],
       _rows
           .map(
@@ -472,6 +494,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               r['launches'],
               (r['screen_pct'] as num?)?.toStringAsFixed(2),
               (r['drain_mah'] as num?)?.toStringAsFixed(1) ?? '',
+              r['rx_bytes'],
+              r['tx_bytes'],
             ],
           )
           .toList(),
@@ -739,12 +763,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     // power attribution to ordinary apps (BatteryStats needs DUMP), so screen
     // time is the only weighting available. What changed is that the total
     // being divided up is now a measurement rather than a constant.
-    _periodDrainUah = drainBetween(
-      await StatsDb.instance.batterySamplesBetween(
-        _periodStartMs(),
-        DateTime.now().millisecondsSinceEpoch,
-      ),
+    final samples = await StatsDb.instance.batterySamplesBetween(
+      _periodStartMs(),
+      DateTime.now().millisecondsSinceEpoch,
     );
+    _periodDrainUah = drainBetween(samples);
+    _batteryPoints = BatteryPoint.fromRows(samples);
+
+    // Network bytes per package for the same window. Merged onto the rows so
+    // a single list answers both "how long" and "how much traffic".
+    final net = await StatsService.networkUsage(_periodStartMs());
+    final rx = <String, int>{};
+    final tx = <String, int>{};
+    for (final n in net) {
+      final pkg = n['package'] as String?;
+      if (pkg == null) continue;
+      rx[pkg] = (n['rx_bytes'] as num?)?.toInt() ?? 0;
+      tx[pkg] = (n['tx_bytes'] as num?)?.toInt() ?? 0;
+    }
+    for (final r in appList) {
+      final pkg = r['package'] as String;
+      r['rx_bytes'] = rx[pkg] ?? 0;
+      r['tx_bytes'] = tx[pkg] ?? 0;
+    }
     for (final r in appList) {
       final fg = (r['fg_ms'] as int?) ?? 0;
       final share = _totalFgMs > 0 ? fg / _totalFgMs : 0.0;
@@ -898,6 +939,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 _monitoringBanner(),
                                 _metricsRow(),
                                 _screenTimeBar(),
+                                _batterySection(),
                                 SizedBox(height: 12),
                                 _periodSwitch(),
                                 SizedBox(height: 6),
@@ -2505,6 +2547,56 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// Filters the already-loaded rows rather than re-querying: the percentages
   /// and the drain split are computed against the full period, and narrowing
   /// the query would silently rescale them to whatever was typed.
+  /// Discharge curve for the period on screen.
+  ///
+  /// Hidden until two samples exist, since a single point is a dot, not a
+  /// trend. The placeholder says samples are being collected rather than
+  /// showing an empty frame that reads as a failure.
+  Widget _batterySection() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    // The gauge's own full-charge reading, not the design capacity: the
+    // samples are counter values on the gauge's scale, and mixing the two put
+    // a full battery at 65% of the axis.
+    final capacity = _capacityUah > 0 ? _capacityUah : _effectiveCapacityUah;
+    if (capacity <= 0) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.batteryChartTitle,
+            style: TextStyle(
+              color: ds.dim,
+              fontSize: PipText.note,
+              letterSpacing: 1,
+            ),
+          ),
+          SizedBox(height: 4),
+          if (_batteryPoints.length < 2)
+            Container(
+              height: 60,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border.all(color: ds.dark),
+              ),
+              child: Text(
+                l10n.batteryChartEmpty,
+                style: TextStyle(
+                  color: ds.dim,
+                  fontSize: PipText.note,
+                  letterSpacing: 1,
+                ),
+              ),
+            )
+          else
+            BatteryChart(points: _batteryPoints, capacityUah: capacity),
+        ],
+      ),
+    );
+  }
+
   Widget _searchField() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
@@ -2677,6 +2769,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 // drain_pct/100 — the very same fraction the green usage bar
                 // already draws — so the two were always identical in width
                 // and carried one piece of information between them.
+                if (((r['rx_bytes'] as int?) ?? 0) +
+                        ((r['tx_bytes'] as int?) ?? 0) >
+                    0)
+                  Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Row(
+                      children: [
+                        Icon(Icons.swap_vert, color: ds.dim, size: 16),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            l10n.netUsage(
+                              formatBytes((r['rx_bytes'] as int?) ?? 0),
+                              formatBytes((r['tx_bytes'] as int?) ?? 0),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: ds.dim,
+                              fontSize: PipText.note,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 if (_batteryInfoAvailable &&
                     (r['screen_pct'] as num?) != null &&
                     (r['screen_pct'] as num) > 0) ...[

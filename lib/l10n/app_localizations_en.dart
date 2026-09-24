@@ -519,4 +519,15 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get searchNoMatch => 'NO MATCHES';
+
+  @override
+  String get batteryChartTitle => 'BATTERY';
+
+  @override
+  String get batteryChartEmpty => 'COLLECTING SAMPLES';
+
+  @override
+  String netUsage(String down, String up) {
+    return '$down down · $up up';
+  }
 }

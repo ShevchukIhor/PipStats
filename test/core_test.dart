@@ -186,6 +186,25 @@ void main() {
     });
   });
 
+  group('formatBytes', () {
+    test('uses SI units, matching carriers and Android settings', () {
+      // 1000, not 1024: a user comparing this against their data plan or the
+      // system settings screen would otherwise see a different number.
+      expect(formatBytes(999), '999 B');
+      expect(formatBytes(1000), '1.0 kB');
+      expect(formatBytes(1500000), '1.5 MB');
+      expect(formatBytes(2000000000), '2.0 GB');
+    });
+
+    test('drops the decimal once it stops carrying information', () {
+      expect(formatBytes(150000000), '150 MB');
+    });
+
+    test('handles zero', () {
+      expect(formatBytes(0), '0 B');
+    });
+  });
+
   group('filterRows', () {
     final rows = <Map<String, Object?>>[
       {'package': 'com.pipstats.app', 'label': 'PipStats'},

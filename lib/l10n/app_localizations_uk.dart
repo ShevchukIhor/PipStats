@@ -521,4 +521,15 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get searchNoMatch => 'НЕМАЄ ЗБІГІВ';
+
+  @override
+  String get batteryChartTitle => 'БАТАРЕЯ';
+
+  @override
+  String get batteryChartEmpty => 'ЗБИРАЄМО ЗАМІРИ';
+
+  @override
+  String netUsage(String down, String up) {
+    return '$down вх · $up вих';
+  }
 }

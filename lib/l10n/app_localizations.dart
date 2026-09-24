@@ -943,6 +943,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'NO MATCHES'**
   String get searchNoMatch;
+
+  /// No description provided for @batteryChartTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'BATTERY'**
+  String get batteryChartTitle;
+
+  /// No description provided for @batteryChartEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'COLLECTING SAMPLES'**
+  String get batteryChartEmpty;
+
+  /// No description provided for @netUsage.
+  ///
+  /// In en, this message translates to:
+  /// **'{down} down · {up} up'**
+  String netUsage(String down, String up);
 }
 
 class _AppLocalizationsDelegate

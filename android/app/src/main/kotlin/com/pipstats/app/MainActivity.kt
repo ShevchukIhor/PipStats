@@ -8,7 +8,10 @@ import android.app.usage.UsageStatsManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.app.usage.NetworkStats
+import android.app.usage.NetworkStatsManager
 import android.content.pm.ApplicationInfo
+import android.net.ConnectivityManager
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -135,6 +138,10 @@ class MainActivity : FlutterFragmentActivity() {
               WalletConnect.signAndSend(this, bytes, result)
             }
           }
+          "networkUsage" -> {
+            val since = call.argument<Long>("since") ?: 0L
+            result.success(networkUsageSince(since))
+          }
           "exportToDownloads" -> {
             val name = call.argument<String>("filename")
             val content = call.argument<String>("content")
@@ -182,6 +189,59 @@ class MainActivity : FlutterFragmentActivity() {
    * asked, so the ongoing notification was invisible on this device
    * (`appops POST_NOTIFICATION: ignore`).
    */
+  /**
+   * Per-package network bytes since [sinceMs], both mobile and Wi-Fi.
+   *
+   * NetworkStatsManager needs PACKAGE_USAGE_STATS, the same grant this app
+   * already requires for usage events — so this adds a whole dimension of data
+   * without asking for anything new.
+   *
+   * Buckets are per-UID, not per-package: a shared user id covers several
+   * packages, so bytes are summed onto every package sharing that uid rather
+   * than attributed to an arbitrary one.
+   */
+  private fun networkUsageSince(sinceMs: Long): List<Map<String, Any?>> {
+    if (!hasUsageAccess()) return emptyList()
+    val nsm = getSystemService(Context.NETWORK_STATS_SERVICE) as? NetworkStatsManager
+      ?: return emptyList()
+    val now = System.currentTimeMillis()
+    val start = if (sinceMs > 0) sinceMs else now - 24 * 60 * 60 * 1000L
+
+    val rxByUid = HashMap<Int, Long>()
+    val txByUid = HashMap<Int, Long>()
+    for (type in intArrayOf(ConnectivityManager.TYPE_MOBILE, ConnectivityManager.TYPE_WIFI)) {
+      try {
+        val stats = nsm.querySummary(type, null, start, now)
+        val bucket = NetworkStats.Bucket()
+        while (stats.hasNextBucket()) {
+          stats.getNextBucket(bucket)
+          rxByUid[bucket.uid] = (rxByUid[bucket.uid] ?: 0L) + bucket.rxBytes
+          txByUid[bucket.uid] = (txByUid[bucket.uid] ?: 0L) + bucket.txBytes
+        }
+        stats.close()
+      } catch (e: Exception) {
+        // A type may be unavailable (no SIM, no permission for that subscriber).
+        Log.w(TAG, "networkUsage type=$type: ${e.message}")
+      }
+    }
+
+    val out = ArrayList<Map<String, Any?>>()
+    val pm = packageManager
+    for ((uid, rx) in rxByUid) {
+      val packages = pm.getPackagesForUid(uid) ?: continue
+      for (pkg in packages) {
+        out.add(
+          mapOf(
+            "package" to pkg,
+            "rx_bytes" to rx,
+            "tx_bytes" to (txByUid[uid] ?: 0L),
+          ),
+        )
+      }
+    }
+    return out
+  }
+
   /**
    * Writes [content] into the shared Downloads collection and returns the
    * display name it landed under, or null on failure.
