@@ -107,7 +107,7 @@ abstract class AppLocalizations {
   /// No description provided for @headerTitle.
   ///
   /// In en, this message translates to:
-  /// **'PIPSTATS  LOCAL  DEVICE  STATS'**
+  /// **'PIPSTATS'**
   String get headerTitle;
 
   /// No description provided for @systemTab.

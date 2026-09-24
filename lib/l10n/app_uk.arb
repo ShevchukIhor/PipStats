@@ -1,7 +1,7 @@
 {
   "@@locale": "uk",
   "appTitle": "PIPSTATS",
-  "headerTitle": "PIPSTATS  ЛОКАЛЬНІ  СТАТИСТИКИ",
+  "headerTitle": "PIPSTATS",
 
   "systemTab": "СИСТЕМА",
   "vaultTab": "СХОВИЩЕ",

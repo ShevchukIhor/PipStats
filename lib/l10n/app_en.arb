@@ -1,7 +1,7 @@
 {
   "@@locale": "en",
   "appTitle": "PIPSTATS",
-  "headerTitle": "PIPSTATS  LOCAL  DEVICE  STATS",
+  "headerTitle": "PIPSTATS",
 
   "systemTab": "SYSTEM",
   "vaultTab": "VAULT",

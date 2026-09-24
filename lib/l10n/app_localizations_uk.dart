@@ -13,7 +13,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get appTitle => 'PIPSTATS';
 
   @override
-  String get headerTitle => 'PIPSTATS  ЛОКАЛЬНІ  СТАТИСТИКИ';
+  String get headerTitle => 'PIPSTATS';
 
   @override
   String get systemTab => 'СИСТЕМА';

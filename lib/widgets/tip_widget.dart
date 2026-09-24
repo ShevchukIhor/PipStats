@@ -117,7 +117,7 @@ class _TipWidgetState extends State<TipWidget> {
       backgroundColor: ds.panel,
       title: Text(
         l10n.tipTitle,
-        style: TextStyle(color: ds.primary, fontSize: 20),
+        style: TextStyle(color: ds.primary, fontSize: PipText.heading),
       ),
       content: Form(
         key: _formKey,
@@ -125,9 +125,20 @@ class _TipWidgetState extends State<TipWidget> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SegmentedButton<TipToken>(
-              segments: const [
-                ButtonSegment(value: TipToken.sol, label: Text('SOL')),
-                ButtonSegment(value: TipToken.skr, label: Text('SKR')),
+              style: SegmentedButton.styleFrom(
+                // The default segment height is well under the 48dp touch
+                // minimum once the type scale goes up.
+                minimumSize: const Size(0, 52),
+              ),
+              segments: [
+                ButtonSegment(
+                  value: TipToken.sol,
+                  label: Text('SOL', style: TextStyle(fontSize: PipText.title)),
+                ),
+                ButtonSegment(
+                  value: TipToken.skr,
+                  label: Text('SKR', style: TextStyle(fontSize: PipText.title)),
+                ),
               ],
               selected: {_selectedType},
               onSelectionChanged: (Set<TipToken> newSelection) {
@@ -143,7 +154,9 @@ class _TipWidgetState extends State<TipWidget> {
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
               decoration: InputDecoration(
                 hintText: l10n.tipAmountHint,
-                hintStyle: TextStyle(color: ds.dim),
+                hintStyle: TextStyle(color: ds.dim, fontSize: PipText.title),
+                contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                errorStyle: TextStyle(fontSize: PipText.note),
                 enabledBorder: UnderlineInputBorder(
                   borderSide: BorderSide(color: ds.primary),
                 ),
@@ -151,7 +164,7 @@ class _TipWidgetState extends State<TipWidget> {
                   borderSide: BorderSide(color: ds.primary, width: 2),
                 ),
               ),
-              style: TextStyle(color: ds.primary, fontSize: 18),
+              style: TextStyle(color: ds.primary, fontSize: PipText.hero),
               validator: (v) {
                 // Same conversion the send path uses, so what validates here
                 // is exactly what gets submitted.
@@ -178,12 +191,19 @@ class _TipWidgetState extends State<TipWidget> {
       ),
       actions: [
         TextButton(
+          style: TextButton.styleFrom(minimumSize: const Size(88, 48)),
           onPressed: _isSending ? null : () => Navigator.pop(context),
-          child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+          child: Text(
+            l10n.cancel,
+            style: TextStyle(color: ds.dim, fontSize: PipText.title),
+          ),
         ),
         ElevatedButton(
           onPressed: _isSending ? null : _handleTip,
-          style: ElevatedButton.styleFrom(backgroundColor: ds.primary),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: ds.primary,
+            minimumSize: const Size(96, 48),
+          ),
           child: _isSending
               ? SizedBox(
                   width: 20,
@@ -193,7 +213,10 @@ class _TipWidgetState extends State<TipWidget> {
                     color: ds.bg,
                   ),
                 )
-              : Text(l10n.tipSend, style: TextStyle(color: ds.bg)),
+              : Text(
+                  l10n.tipSend,
+                  style: TextStyle(color: ds.bg, fontSize: PipText.title),
+                ),
         ),
       ],
     );

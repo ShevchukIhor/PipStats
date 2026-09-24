@@ -13,7 +13,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appTitle => 'PIPSTATS';
 
   @override
-  String get headerTitle => 'PIPSTATS  LOCAL  DEVICE  STATS';
+  String get headerTitle => 'PIPSTATS';
 
   @override
   String get systemTab => 'SYSTEM';
