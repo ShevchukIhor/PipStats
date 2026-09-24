@@ -186,6 +186,74 @@ void main() {
     });
   });
 
+  group('RevokeService.buildRevokeAllMessage', () {
+    const owner = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+    const a1 = '5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm';
+    const a2 = 'So11111111111111111111111111111111111111112';
+    const blockhash = 'EETubP5AKHgjPAhzPAFcb8BAY1hMH639CWCFTqi3hq1k';
+
+    test('emits transaction wire format', () {
+      final bytes = RevokeService.buildRevokeAllMessage(
+        ownerAddress: owner,
+        tokenAccounts: [a1, a2],
+        blockhash: blockhash,
+      );
+      expect(bytes.first, 1, reason: 'the owner is the only signer');
+      expect(bytes.sublist(1, 65), everyElement(0));
+      expect(bytes.sublist(65).first, 1);
+    });
+
+    test('more accounts means a longer transaction', () {
+      List<int> build(List<String> accs) =>
+          RevokeService.buildRevokeAllMessage(
+            ownerAddress: owner,
+            tokenAccounts: accs,
+            blockhash: blockhash,
+          );
+      expect(build([a1, a2]).length, greaterThan(build([a1]).length));
+    });
+
+    test('refuses an empty list instead of sending a no-op', () {
+      expect(
+        () => RevokeService.buildRevokeAllMessage(
+          ownerAddress: owner,
+          tokenAccounts: const [],
+          blockhash: blockhash,
+        ),
+        throwsArgumentError,
+      );
+    });
+
+    test('a batch stays under the 1232-byte packet limit', () {
+      // The real constraint is the packet size, not the instruction count.
+      final bytes = RevokeService.buildRevokeAllMessage(
+        ownerAddress: owner,
+        tokenAccounts: List.filled(
+          RevokeService.maxRevokesPerTransaction,
+          a1,
+        ),
+        blockhash: blockhash,
+      );
+      expect(bytes.length, lessThan(1232));
+    });
+  });
+
+  group('RevokeService.chunkAccounts', () {
+    test('splits at the batch size', () {
+      final accounts = List.generate(23, (i) => 'acct$i');
+      final chunks = RevokeService.chunkAccounts(accounts);
+      expect(chunks, hasLength(3));
+      expect(chunks[0], hasLength(10));
+      expect(chunks[2], hasLength(3));
+      expect(chunks.expand((c) => c).toList(), accounts);
+    });
+
+    test('a short list is one chunk, an empty list is none', () {
+      expect(RevokeService.chunkAccounts(['a']), hasLength(1));
+      expect(RevokeService.chunkAccounts([]), isEmpty);
+    });
+  });
+
   group('formatBytes', () {
     test('uses SI units, matching carriers and Android settings', () {
       // 1000, not 1024: a user comparing this against their data plan or the

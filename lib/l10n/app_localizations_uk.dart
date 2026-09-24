@@ -532,4 +532,19 @@ class AppLocalizationsUk extends AppLocalizations {
   String netUsage(String down, String up) {
     return '$down вх · $up вих';
   }
+
+  @override
+  String revokeAll(int count) {
+    return 'ВІДКЛИКАТИ ВСІ ($count)';
+  }
+
+  @override
+  String revokeAllConfirm(int count, int txs) {
+    return 'Відкликати делегата на всіх $count токен-акаунтах? Це надсилається як $txs транзакцій, і кожну треба підтвердити в гаманці.';
+  }
+
+  @override
+  String revokeAllDone(int count) {
+    return 'Відкликано дозволів: $count';
+  }
 }

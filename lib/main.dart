@@ -1411,6 +1411,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               else ...[
                 _delegationAlert(ds, l10n, _delegatedAccounts.length),
                 SizedBox(height: 8),
+                _revokeAllButton(),
+                SizedBox(height: 8),
                 ..._delegatedAccounts.map((t) => _delegationRow(t)),
               ],
             ],
@@ -1715,6 +1717,99 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         ],
       ),
     );
+  }
+
+  /// Revokes every active approval, batched into as few transactions as the
+  /// packet limit allows.
+  ///
+  /// Exists because the moment this screen matters is the moment someone has
+  /// spotted a spender they do not recognise, and clearing them one at a time
+  /// is the wrong thing to ask for then.
+  Widget _revokeAllButton() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    final accounts = _delegatedAccounts;
+    if (accounts.length < 2) return const SizedBox.shrink();
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: ds.dangerTextStrong,
+          minimumSize: const Size(0, 48),
+          shape: const RoundedRectangleBorder(),
+        ),
+        onPressed: _revokeBusy ? null : () => _confirmRevokeAll(accounts),
+        child: Text(
+          l10n.revokeAll(accounts.length),
+          style: TextStyle(
+            color: ds.bg,
+            fontSize: PipText.value,
+            letterSpacing: 1,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _confirmRevokeAll(List<TokenAccountInfo> accounts) async {
+    final l10n = AppLocalizations.of(context);
+    final ds = context.ds;
+    final pubkeys = accounts.map((a) => a.pubkey).toList();
+    final txCount = RevokeService.chunkAccounts(pubkeys).length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.panel,
+        title: Text(
+          l10n.revokeAll(accounts.length),
+          style: TextStyle(color: ds.primary, fontSize: PipText.heading),
+        ),
+        content: Text(
+          l10n.revokeAllConfirm(accounts.length, txCount),
+          style: TextStyle(color: ds.dim, fontSize: PipText.body),
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(minimumSize: const Size(88, 48)),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              l10n.cancel,
+              style: TextStyle(color: ds.dim, fontSize: PipText.value),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: ds.dangerTextStrong,
+              minimumSize: const Size(96, 48),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              l10n.revokeAll(accounts.length),
+              style: TextStyle(color: ds.bg, fontSize: PipText.value),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    final owner = _walletAddress;
+    if (owner == null) return;
+    setState(() => _revokeBusy = true);
+    try {
+      await RevokeService.instance.revokeAll(
+        ownerAddress: owner,
+        tokenAccounts: pubkeys,
+      );
+      if (!mounted) return;
+      _toast(l10n.revokeAllDone(accounts.length));
+      await _loadVaultData();
+    } catch (e) {
+      if (!mounted) return;
+      _toast('$e');
+    } finally {
+      if (mounted) setState(() => _revokeBusy = false);
+    }
   }
 
   Widget _delegationRow(TokenAccountInfo t) {

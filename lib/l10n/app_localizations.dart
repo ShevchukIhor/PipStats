@@ -961,6 +961,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{down} down · {up} up'**
   String netUsage(String down, String up);
+
+  /// No description provided for @revokeAll.
+  ///
+  /// In en, this message translates to:
+  /// **'REVOKE ALL ({count})'**
+  String revokeAll(int count);
+
+  /// No description provided for @revokeAllConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoke the delegate on all {count} token accounts? This is sent as {txs} transaction(s) and each must be approved in the wallet.'**
+  String revokeAllConfirm(int count, int txs);
+
+  /// No description provided for @revokeAllDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Revoked {count} approvals'**
+  String revokeAllDone(int count);
 }
 
 class _AppLocalizationsDelegate

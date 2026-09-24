@@ -97,6 +97,102 @@ class RevokeService {
     ];
   }
 
+  /// Unsigned transaction bytes revoking the delegate on several token
+  /// accounts at once.
+  ///
+  /// One transaction, one signature, one fee — rather than making someone
+  /// approve each approval separately in the very situation where speed
+  /// matters, after spotting a spender they do not recognise.
+  ///
+  /// [tokenAccounts] must be non-empty. Solana caps a transaction at 1232
+  /// bytes, so callers must chunk; [maxRevokesPerTransaction] is the safe
+  /// batch size and [chunkAccounts] applies it.
+  static List<int> buildRevokeAllMessage({
+    required String ownerAddress,
+    required List<String> tokenAccounts,
+    required String blockhash,
+  }) {
+    if (tokenAccounts.isEmpty) {
+      throw ArgumentError('tokenAccounts must not be empty');
+    }
+    final owner = Ed25519HDPublicKey.fromBase58(ownerAddress);
+    final instructions = tokenAccounts
+        .map(
+          (a) => TokenInstruction.revoke(
+            source: Ed25519HDPublicKey.fromBase58(a),
+            sourceOwner: owner,
+            signers: [owner],
+          ),
+        )
+        .toList();
+
+    final compiled = Message(instructions: instructions).compile(
+      recentBlockhash: blockhash,
+      feePayer: owner,
+    );
+    final messageBytes = compiled.toByteArray().toList();
+    final signatureCount = messageBytes[0];
+    return <int>[
+      signatureCount,
+      ...List<int>.filled(signatureCount * 64, 0),
+      ...messageBytes,
+    ];
+  }
+
+  /// Accounts per revoke-all transaction.
+  ///
+  /// A revoke instruction carries one account key plus a few bytes; the limit
+  /// is Solana's 1232-byte packet, not the instruction count. Ten leaves ample
+  /// headroom for the header, blockhash and signature slot, so a wallet with
+  /// many approvals splits into several transactions instead of building one
+  /// that the network rejects.
+  static const int maxRevokesPerTransaction = 10;
+
+  /// Splits [accounts] into batches of [maxRevokesPerTransaction].
+  static List<List<String>> chunkAccounts(List<String> accounts) {
+    final out = <List<String>>[];
+    for (var i = 0; i < accounts.length; i += maxRevokesPerTransaction) {
+      out.add(
+        accounts.sublist(
+          i,
+          i + maxRevokesPerTransaction > accounts.length
+              ? accounts.length
+              : i + maxRevokesPerTransaction,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// Revokes every account in [tokenAccounts], batching as needed.
+  ///
+  /// Returns the signature of each transaction sent. Stops at the first
+  /// failure and rethrows: a partial revoke is worth reporting truthfully
+  /// rather than continuing and summarising at the end.
+  Future<List<String>> revokeAll({
+    required String ownerAddress,
+    required List<String> tokenAccounts,
+  }) async {
+    final signatures = <String>[];
+    for (final batch in chunkAccounts(tokenAccounts)) {
+      final blockhash = await _getBlockhash();
+      final txBytes = buildRevokeAllMessage(
+        ownerAddress: ownerAddress,
+        tokenAccounts: batch,
+        blockhash: blockhash,
+      );
+      final response = await _channel.invokeMethod<Map>('revokeDelegate', {
+        'message_bytes': txBytes,
+      });
+      if (response == null) {
+        throw Exception('REVOKE CANCELLED OR UNAVAILABLE');
+      }
+      final sig = response['signature'];
+      signatures.add(sig is String ? sig : '');
+    }
+    return signatures;
+  }
+
   /// Build the unsigned revoke transaction message bytes and submit it to the
   /// native MWA layer for signing + sending via Seed Vault.
   /// Returns the first transaction signature (base58) on success.

@@ -530,4 +530,19 @@ class AppLocalizationsEn extends AppLocalizations {
   String netUsage(String down, String up) {
     return '$down down · $up up';
   }
+
+  @override
+  String revokeAll(int count) {
+    return 'REVOKE ALL ($count)';
+  }
+
+  @override
+  String revokeAllConfirm(int count, int txs) {
+    return 'Revoke the delegate on all $count token accounts? This is sent as $txs transaction(s) and each must be approved in the wallet.';
+  }
+
+  @override
+  String revokeAllDone(int count) {
+    return 'Revoked $count approvals';
+  }
 }
