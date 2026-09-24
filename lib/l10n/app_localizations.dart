@@ -913,6 +913,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'DISCHARGED THIS PERIOD: {mah} mAh'**
   String periodDrainTotal(String mah);
+
+  /// No description provided for @exportDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved to Downloads: {name}'**
+  String exportDone(String name);
+
+  /// No description provided for @exportFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Export failed'**
+  String get exportFailed;
+
+  /// No description provided for @exportNothing.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to export'**
+  String get exportNothing;
+
+  /// No description provided for @searchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'FILTER APPS'**
+  String get searchHint;
+
+  /// No description provided for @searchNoMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'NO MATCHES'**
+  String get searchNoMatch;
 }
 
 class _AppLocalizationsDelegate

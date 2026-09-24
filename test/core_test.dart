@@ -186,6 +186,64 @@ void main() {
     });
   });
 
+  group('filterRows', () {
+    final rows = <Map<String, Object?>>[
+      {'package': 'com.pipstats.app', 'label': 'PipStats'},
+      {'package': 'ag.jup.jupiter.android', 'label': 'Jupiter'},
+      {'package': 'com.android.settings', 'label': 'Settings'},
+    ];
+
+    test('an empty query returns the list untouched', () {
+      expect(filterRows(rows, ''), same(rows));
+      expect(filterRows(rows, '   '), same(rows));
+    });
+
+    test('matches the label, ignoring case', () {
+      expect(filterRows(rows, 'jUpI').single['label'], 'Jupiter');
+    });
+
+    test('matches the package too', () {
+      // Clones and work-profile copies share a display name; the package id is
+      // the only thing that tells them apart.
+      expect(filterRows(rows, 'ag.jup').single['label'], 'Jupiter');
+      expect(filterRows(rows, 'com.').length, 2);
+    });
+
+    test('no match yields an empty list, not everything', () {
+      expect(filterRows(rows, 'zzz'), isEmpty);
+    });
+  });
+
+  group('CSV export', () {
+    test('quotes fields that would break the row', () {
+      // App labels routinely contain commas; an unescaped one silently shifts
+      // every later column, which is worse than a visibly broken file.
+      expect(csvField('Maps, Navigate & Explore'), '"Maps, Navigate & Explore"');
+      expect(csvField('say "hi"'), '"say ""hi"""');
+      expect(csvField('two\nlines'), '"two\nlines"');
+    });
+
+    test('leaves ordinary fields alone', () {
+      expect(csvField('com.pipstats.app'), 'com.pipstats.app');
+      expect(csvField(1234), '1234');
+      expect(csvField(null), '');
+    });
+
+    test('builds a header and one row per entry', () {
+      final out = buildCsv(
+        ['package', 'label'],
+        [
+          ['a', 'App A'],
+          ['b', 'B, Inc'],
+        ],
+      );
+      final lines = out.trim().split('\n');
+      expect(lines, hasLength(3));
+      expect(lines.first, 'package,label');
+      expect(lines.last, 'b,"B, Inc"');
+    });
+  });
+
   group('drainBetween', () {
     Map<String, Object?> s(int ts, int counter, {bool charging = false}) => {
       'ts': ts,

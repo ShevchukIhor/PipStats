@@ -504,4 +504,21 @@ class AppLocalizationsUk extends AppLocalizations {
   String periodDrainTotal(String mah) {
     return 'РОЗРЯДЖЕНО ЗА ПЕРІОД: $mah mAh';
   }
+
+  @override
+  String exportDone(String name) {
+    return 'Збережено в Downloads: $name';
+  }
+
+  @override
+  String get exportFailed => 'Експорт не вдався';
+
+  @override
+  String get exportNothing => 'Нема чого експортувати';
+
+  @override
+  String get searchHint => 'ФІЛЬТР ЗАСТОСУНКІВ';
+
+  @override
+  String get searchNoMatch => 'НЕМАЄ ЗБІГІВ';
 }

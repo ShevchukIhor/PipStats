@@ -162,5 +162,13 @@
   },
   "@periodDrainTotal": {
     "placeholders": { "mah": { "type": "String" } }
-  }
+  },
+  "exportDone": "Збережено в Downloads: {name}",
+  "exportFailed": "Експорт не вдався",
+  "exportNothing": "Нема чого експортувати",
+  "@exportDone": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "searchHint": "ФІЛЬТР ЗАСТОСУНКІВ",
+  "searchNoMatch": "НЕМАЄ ЗБІГІВ"
 }

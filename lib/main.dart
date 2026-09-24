@@ -127,6 +127,44 @@ enum Period { day, week, month, all }
 
 enum SortKey { time, launches }
 
+/// Rows whose label or package matches [query], case-insensitively.
+///
+/// Matches the package name as well as the label so a user can find an app by
+/// its id when two apps share a display name, which happens with clones and
+/// work-profile copies.
+List<Map<String, Object?>> filterRows(
+  List<Map<String, Object?>> rows,
+  String query,
+) {
+  final q = query.trim().toLowerCase();
+  if (q.isEmpty) return rows;
+  return rows.where((r) {
+    final label = (r['label'] as String? ?? '').toLowerCase();
+    final pkg = (r['package'] as String? ?? '').toLowerCase();
+    return label.contains(q) || pkg.contains(q);
+  }).toList();
+}
+
+/// Escapes one CSV field.
+///
+/// Quotes whenever the value contains a comma, quote, or newline, and doubles
+/// embedded quotes — app labels routinely contain commas, and an unescaped one
+/// silently shifts every later column in the row.
+String csvField(Object? value) {
+  final s = value?.toString() ?? '';
+  if (!s.contains(RegExp(r'[",\n\r]'))) return s;
+  return '"${s.replaceAll('"', '""')}"';
+}
+
+/// Builds a CSV from [header] and [rows].
+String buildCsv(List<String> header, List<List<Object?>> rows) {
+  final buffer = StringBuffer()..writeln(header.map(csvField).join(','));
+  for (final row in rows) {
+    buffer.writeln(row.map(csvField).join(','));
+  }
+  return buffer.toString();
+}
+
 /// Charge discharged across [samples], in µAh.
 ///
 /// Sums only the drops between consecutive samples. A plain first-minus-last
@@ -221,6 +259,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _batteryInfoAvailable = false;
   String _uptime = '';
   List<Map<String, Object?>> _rows = [];
+
+  /// Live filter over [_rows]. Kept out of the query so typing never hits the
+  /// database or disturbs the totals the percentages are computed against.
+  String _appQuery = '';
+  final _searchController = TextEditingController();
+
+  /// [_rows] narrowed by [_appQuery].
+  List<Map<String, Object?>> get _visibleRows => filterRows(_rows, _appQuery);
   bool _hasAccess = false;
   bool _syncing = false;
   bool _shortHistory = false;
@@ -297,6 +343,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _pollTimer?.cancel();
     _addressController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -395,6 +442,63 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Pull-to-refresh for the tabs. Also re-checks monitoring health, since a
   /// pull is exactly when someone is asking whether the data is current.
+  /// Writes the usage table for the current period to Downloads as CSV.
+  ///
+  /// Exports what is on screen, including the drain estimate, so a row in the
+  /// file can be traced back to a row in the app. Until this existed there was
+  /// no way to get the history out at all — reinstalling the app destroyed it,
+  /// which is how five days of it were lost during development.
+  Future<void> _exportUsage() async {
+    final l10n = AppLocalizations.of(context);
+    if (_rows.isEmpty) {
+      _toast(l10n.exportNothing);
+      return;
+    }
+    final csv = buildCsv(
+      const [
+        'package',
+        'label',
+        'foreground_ms',
+        'launches',
+        'screen_pct',
+        'drain_mah_estimate',
+      ],
+      _rows
+          .map(
+            (r) => [
+              r['package'],
+              r['label'],
+              r['fg_ms'],
+              r['launches'],
+              (r['screen_pct'] as num?)?.toStringAsFixed(2),
+              (r['drain_mah'] as num?)?.toStringAsFixed(1) ?? '',
+            ],
+          )
+          .toList(),
+    );
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 19)
+        .replaceAll(RegExp(r'[:T]'), '-');
+    final saved = await StatsService.exportToDownloads(
+      'pipstats-usage-$stamp.csv',
+      csv,
+    );
+    if (!mounted) return;
+    _toast(saved == null ? l10n.exportFailed : l10n.exportDone(saved));
+  }
+
+  void _toast(String message) {
+    final ds = context.ds;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: TextStyle(color: ds.bg)),
+        backgroundColor: ds.primary,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   Future<void> _pullRefresh() async {
     await _manualRefresh();
     await _refreshMonitoringHealth();
@@ -823,17 +927,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 if (!_hasAccess) _accessHint(),
                                 if (_hasAccess) _sortHeader(),
                                 if (_hasAccess) _periodDrainLine(),
+                                if (_hasAccess && _rows.isNotEmpty)
+                                  _searchField(),
                               ],
                             ),
                           ),
-                          if (_rows.isEmpty)
+                          if (_visibleRows.isEmpty)
                             SliverFillRemaining(
                               hasScrollBody: false,
                               child: Center(
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(vertical: 40),
                                   child: Text(
-                                    l10n.noDataYet,
+                                    _rows.isEmpty
+                                        ? l10n.noDataYet
+                                        : l10n.searchNoMatch,
                                     style: TextStyle(
                                       color: ds.dim,
                                       letterSpacing: 2,
@@ -844,7 +952,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             )
                           else
                             SliverList.builder(
-                              itemCount: _rows.length,
+                              itemCount: _visibleRows.length,
                               itemBuilder: (ctx, i) => _appRow(i),
                             ),
                         ],
@@ -900,6 +1008,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ),
           SizedBox(width: 8),
           _cornerButton(Icons.palette_outlined, _cycleTheme),
+          _cornerButton(Icons.download_outlined, _exportUsage),
           _cornerButton(Icons.refresh, _manualRefresh),
           _cornerButton(Icons.delete_sweep, _resetGroup),
           _cornerButton(Icons.attach_money_outlined, _showTipModal),
@@ -2391,6 +2500,53 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Filter box over the application list.
+  ///
+  /// Filters the already-loaded rows rather than re-querying: the percentages
+  /// and the drain split are computed against the full period, and narrowing
+  /// the query would silently rescale them to whatever was typed.
+  Widget _searchField() {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (v) => setState(() => _appQuery = v),
+        style: TextStyle(color: ds.primary, fontSize: PipText.value),
+        cursorColor: ds.primary,
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+          hintText: l10n.searchHint,
+          hintStyle: TextStyle(
+            color: ds.dim,
+            fontSize: PipText.label,
+            letterSpacing: 1,
+          ),
+          prefixIcon: Icon(Icons.search, color: ds.dim, size: 22),
+          suffixIcon: _appQuery.isEmpty
+              ? null
+              : IconButton(
+                  icon: Icon(Icons.close, color: ds.dim, size: 22),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _appQuery = '');
+                  },
+                ),
+          enabledBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: ds.dark),
+            borderRadius: BorderRadius.zero,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderSide: BorderSide(color: ds.primary),
+            borderRadius: BorderRadius.zero,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _sortHeader() {
     final ds = context.ds;
     final l10n = AppLocalizations.of(context);
@@ -2463,7 +2619,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final l10n = AppLocalizations.of(context);
     {
       {
-        final r = _rows[i];
+        final r = _visibleRows[i];
         final pkg = r['package'] as String;
         return Container(
           margin: EdgeInsets.symmetric(horizontal: 12, vertical: 1),

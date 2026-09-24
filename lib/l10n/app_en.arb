@@ -188,5 +188,13 @@
   },
   "@periodDrainTotal": {
     "placeholders": { "mah": { "type": "String" } }
-  }
+  },
+  "exportDone": "Saved to Downloads: {name}",
+  "exportFailed": "Export failed",
+  "exportNothing": "Nothing to export",
+  "@exportDone": {
+    "placeholders": { "name": { "type": "String" } }
+  },
+  "searchHint": "FILTER APPS",
+  "searchNoMatch": "NO MATCHES"
 }

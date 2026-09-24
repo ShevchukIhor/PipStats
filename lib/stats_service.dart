@@ -104,6 +104,28 @@ class StatsService {
     }
   }
 
+  /// Writes [content] into the shared Downloads folder.
+  ///
+  /// Returns the file name it actually landed under — MediaStore renames on
+  /// collision rather than overwriting, so this can differ from [filename] —
+  /// or null if the write failed.
+  static Future<String?> exportToDownloads(
+    String filename,
+    String content, {
+    String mime = 'text/csv',
+  }) async {
+    try {
+      return await _channel.invokeMethod<String>('exportToDownloads', {
+        'filename': filename,
+        'content': content,
+        'mime': mime,
+      });
+    } catch (e) {
+      log('exportToDownloads error: $e');
+      return null;
+    }
+  }
+
   /// Whether our notifications can be shown.
   ///
   /// The monitoring notification is the user's only signal that collection is

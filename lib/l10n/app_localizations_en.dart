@@ -502,4 +502,21 @@ class AppLocalizationsEn extends AppLocalizations {
   String periodDrainTotal(String mah) {
     return 'DISCHARGED THIS PERIOD: $mah mAh';
   }
+
+  @override
+  String exportDone(String name) {
+    return 'Saved to Downloads: $name';
+  }
+
+  @override
+  String get exportFailed => 'Export failed';
+
+  @override
+  String get exportNothing => 'Nothing to export';
+
+  @override
+  String get searchHint => 'FILTER APPS';
+
+  @override
+  String get searchNoMatch => 'NO MATCHES';
 }

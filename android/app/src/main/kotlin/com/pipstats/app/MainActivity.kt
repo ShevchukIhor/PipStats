@@ -5,6 +5,7 @@ import android.app.AppOpsManager
 import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -16,9 +17,11 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Environment
 import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
+import android.provider.MediaStore
 import android.provider.Settings
 import android.os.SystemClock
 import android.util.Base64
@@ -132,6 +135,17 @@ class MainActivity : FlutterFragmentActivity() {
               WalletConnect.signAndSend(this, bytes, result)
             }
           }
+          "exportToDownloads" -> {
+            val name = call.argument<String>("filename")
+            val content = call.argument<String>("content")
+            if (name == null || content == null) {
+              result.error("BAD_ARGS", "filename and content required", null)
+            } else {
+              result.success(
+                exportToDownloads(name, content, call.argument<String>("mime") ?: "text/csv"),
+              )
+            }
+          }
           "areNotificationsEnabled" -> result.success(areNotificationsEnabled())
           "requestNotificationPermission" -> {
             requestNotificationPermission()
@@ -168,6 +182,52 @@ class MainActivity : FlutterFragmentActivity() {
    * asked, so the ongoing notification was invisible on this device
    * (`appops POST_NOTIFICATION: ignore`).
    */
+  /**
+   * Writes [content] into the shared Downloads collection and returns the
+   * display name it landed under, or null on failure.
+   *
+   * Goes through MediaStore rather than a raw file path: scoped storage means
+   * an app cannot write into Downloads directly, and this route needs no
+   * runtime permission at all on Android 10+.
+   *
+   * MediaStore renames on collision rather than overwriting, so the returned
+   * name can differ from the one passed in — report that name, not the one
+   * that was asked for.
+   */
+  private fun exportToDownloads(name: String, content: String, mime: String): String? = try {
+    val values = ContentValues().apply {
+      put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+      put(MediaStore.MediaColumns.MIME_TYPE, mime)
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        put(MediaStore.MediaColumns.IS_PENDING, 1)
+      }
+    }
+    val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      MediaStore.Downloads.EXTERNAL_CONTENT_URI
+    } else {
+      MediaStore.Files.getContentUri("external")
+    }
+    val uri = contentResolver.insert(collection, values)
+    if (uri == null) {
+      null
+    } else {
+      contentResolver.openOutputStream(uri)?.use {
+        it.write(content.toByteArray(Charsets.UTF_8))
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+        contentResolver.update(uri, values, null, null)
+      }
+      contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
+        ?.use { c -> if (c.moveToFirst()) c.getString(0) else name } ?: name
+    }
+  } catch (e: Exception) {
+    Log.w(TAG, "export failed: ${e.message}")
+    null
+  }
+
   private fun areNotificationsEnabled(): Boolean =
     NotificationManagerCompat.from(this).areNotificationsEnabled()
 
