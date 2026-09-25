@@ -248,6 +248,204 @@ abstract class AppLocalizations {
   /// **'GRANT ACCESS'**
   String get grantAccess;
 
+  /// No description provided for @onboardTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'[ PIPSTATS ]'**
+  String get onboardTitle;
+
+  /// No description provided for @onboardIntroHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'WHAT THIS DOES'**
+  String get onboardIntroHeading;
+
+  /// No description provided for @onboardIntroBody.
+  ///
+  /// In en, this message translates to:
+  /// **'PipStats measures how you use this device: how long each app spends in the foreground, how often you open it, how much data it moves, and what it costs your battery.\n\nEverything is read from Android\'s own counters and written to a database on this device. There is no server, no account and no analytics, so none of it is ever uploaded.'**
+  String get onboardIntroBody;
+
+  /// No description provided for @onboardUsageHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'USAGE ACCESS'**
+  String get onboardUsageHeading;
+
+  /// No description provided for @onboardRestrictedHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'SWITCH GREYED OUT?'**
+  String get onboardRestrictedHeading;
+
+  /// No description provided for @onboardRestrictedBody.
+  ///
+  /// In en, this message translates to:
+  /// **'If the switch does nothing, or you saw \"App was denied access\", Android has flagged this install as sideloaded and blocked the setting. It is not broken — it needs one extra step.\n\n1. Open App info below.\n2. Tap the three dots in the top-right corner.\n3. Choose \"Allow restricted settings\".\n4. Come back here and grant usage access again.\n\nAndroid adds this hurdle to apps installed outside an app store. Nothing about the permission itself changes.'**
+  String get onboardRestrictedBody;
+
+  /// No description provided for @onboardOpenAppInfo.
+  ///
+  /// In en, this message translates to:
+  /// **'OPEN APP INFO'**
+  String get onboardOpenAppInfo;
+
+  /// No description provided for @onboardNotifHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'NOTIFICATIONS'**
+  String get onboardNotifHeading;
+
+  /// No description provided for @onboardNotifBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Measuring continues while the app is closed, so a background service runs with a permanent notification. That notification is your only sign that collection is on — Android hides it until you allow notifications.'**
+  String get onboardNotifBody;
+
+  /// No description provided for @onboardBatteryHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'BATTERY OPTIMIZATION'**
+  String get onboardBatteryHeading;
+
+  /// No description provided for @onboardBatteryBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Some manufacturers kill background services aggressively. Exempting PipStats keeps measurement continuous on those devices.\n\nThis one is optional: everything works without it, you may just find gaps in the history.'**
+  String get onboardBatteryBody;
+
+  /// No description provided for @onboardDoneHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'READY'**
+  String get onboardDoneHeading;
+
+  /// No description provided for @onboardDoneBody.
+  ///
+  /// In en, this message translates to:
+  /// **'You can change any of this later. Settings holds every switch, and RESET STATS clears what was collected.'**
+  String get onboardDoneBody;
+
+  /// No description provided for @onboardRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'REQUIRED'**
+  String get onboardRequired;
+
+  /// No description provided for @onboardOptional.
+  ///
+  /// In en, this message translates to:
+  /// **'OPTIONAL'**
+  String get onboardOptional;
+
+  /// No description provided for @onboardGranted.
+  ///
+  /// In en, this message translates to:
+  /// **'GRANTED'**
+  String get onboardGranted;
+
+  /// No description provided for @onboardLater.
+  ///
+  /// In en, this message translates to:
+  /// **'LATER'**
+  String get onboardLater;
+
+  /// No description provided for @onboardBack.
+  ///
+  /// In en, this message translates to:
+  /// **'BACK'**
+  String get onboardBack;
+
+  /// No description provided for @onboardNext.
+  ///
+  /// In en, this message translates to:
+  /// **'NEXT'**
+  String get onboardNext;
+
+  /// No description provided for @onboardStart.
+  ///
+  /// In en, this message translates to:
+  /// **'START'**
+  String get onboardStart;
+
+  /// No description provided for @onboardAllow.
+  ///
+  /// In en, this message translates to:
+  /// **'ALLOW'**
+  String get onboardAllow;
+
+  /// No description provided for @onboardPrivacyLink.
+  ///
+  /// In en, this message translates to:
+  /// **'PRIVACY POLICY'**
+  String get onboardPrivacyLink;
+
+  /// No description provided for @onboardReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'SETUP GUIDE'**
+  String get onboardReopen;
+
+  /// No description provided for @usageDisclosureTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'[ BEFORE YOU GRANT ACCESS ]'**
+  String get usageDisclosureTitle;
+
+  /// No description provided for @usageDisclosureWhat.
+  ///
+  /// In en, this message translates to:
+  /// **'WHAT IS READ: per-app foreground time and launch counts, per-app network bytes, and battery charge samples.'**
+  String get usageDisclosureWhat;
+
+  /// No description provided for @usageDisclosureWhy.
+  ///
+  /// In en, this message translates to:
+  /// **'WHY: this is the only source Android offers for app usage and for estimating which apps drained your battery. Without it the statistics screens stay empty.'**
+  String get usageDisclosureWhy;
+
+  /// No description provided for @usageDisclosureWhere.
+  ///
+  /// In en, this message translates to:
+  /// **'WHERE IT GOES: nowhere. Everything is written to a local database on this device. PipStats has no server, no account and no analytics, and never uploads usage or battery data.'**
+  String get usageDisclosureWhere;
+
+  /// No description provided for @usageDisclosureService.
+  ///
+  /// In en, this message translates to:
+  /// **'ONGOING NOTIFICATION: measuring continues while the app is closed, so a foreground service runs with a permanent notification. That notification is your indicator that monitoring is on.'**
+  String get usageDisclosureService;
+
+  /// No description provided for @usageDisclosureRevoke.
+  ///
+  /// In en, this message translates to:
+  /// **'REVOKING: turn Usage access off in the same settings screen at any time, or clear what was collected with RESET STATS.'**
+  String get usageDisclosureRevoke;
+
+  /// No description provided for @usageDisclosureMore.
+  ///
+  /// In en, this message translates to:
+  /// **'READ MORE ABOUT PERMISSIONS'**
+  String get usageDisclosureMore;
+
+  /// No description provided for @usageDisclosureContinue.
+  ///
+  /// In en, this message translates to:
+  /// **'OPEN SETTINGS'**
+  String get usageDisclosureContinue;
+
+  /// No description provided for @linkCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'LINK COPIED'**
+  String get linkCopied;
+
+  /// No description provided for @linkOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NO BROWSER FOUND — LINK COPIED'**
+  String get linkOpenFailed;
+
   /// No description provided for @seedVault.
   ///
   /// In en, this message translates to:
@@ -641,7 +839,7 @@ abstract class AppLocalizations {
   /// No description provided for @privacyBody.
   ///
   /// In en, this message translates to:
-  /// **'Device Stats keeps your data on-device. Usage statistics are stored only in a local database. When you connect a wallet, the app performs read-only queries to public Solana APIs using your public address. Private keys and seed phrases never leave the secure Seed Vault. No personal data is sold or shared. See PRIVACY.md for the full policy.'**
+  /// **'PipStats keeps your data on-device. Usage statistics are stored only in a local database. When you connect a wallet, the app performs read-only queries to public Solana APIs using your public address. Private keys and seed phrases never leave the secure Seed Vault. No personal data is sold or shared. Full policy at https://pipstats.pages.dev/privacy, permission details at https://pipstats.pages.dev/permissions.'**
   String get privacyBody;
 
   /// No description provided for @close.
@@ -719,13 +917,13 @@ abstract class AppLocalizations {
   /// No description provided for @appDescription.
   ///
   /// In en, this message translates to:
-  /// **'Device Stats tracks app foreground time and launch counts locally. No cloud, no tracking. Built for Solana Mobile.'**
+  /// **'PipStats tracks app foreground time and launch counts locally. No cloud, no tracking. Built for Solana Mobile.'**
   String get appDescription;
 
   /// No description provided for @termsBody.
   ///
   /// In en, this message translates to:
-  /// **'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms'**
+  /// **'PipStats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms'**
   String get termsBody;
 
   /// No description provided for @tipButton.
@@ -769,12 +967,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'TIP FAILED: {error}'**
   String tipError(Object error);
-
-  /// No description provided for @tipNoWallet.
-  ///
-  /// In en, this message translates to:
-  /// **'CONNECT WALLET FIRST'**
-  String get tipNoWallet;
 
   /// No description provided for @tipInvalidAmount.
   ///
@@ -821,7 +1013,7 @@ abstract class AppLocalizations {
   /// No description provided for @aboutTitle.
   ///
   /// In en, this message translates to:
-  /// **'ABOUT DEVICE STATS'**
+  /// **'ABOUT PIPSTATS'**
   String get aboutTitle;
 
   /// No description provided for @website.
@@ -917,8 +1109,14 @@ abstract class AppLocalizations {
   /// No description provided for @exportDone.
   ///
   /// In en, this message translates to:
-  /// **'Saved to Downloads: {name}'**
+  /// **'Exported: {name}'**
   String exportDone(String name);
+
+  /// No description provided for @exportCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Export cancelled'**
+  String get exportCancelled;
 
   /// No description provided for @exportFailed.
   ///

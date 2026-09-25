@@ -280,22 +280,37 @@ class TipService {
   ///
   /// [amountText] is the raw user input, converted to base units without
   /// floating-point rounding.
+  /// [ownerAddress] may be null: tipping does not require a wallet to be
+  /// connected first, because signing already goes through Seed Vault. When it
+  /// is null the wallet is authorised here and its address is adopted — and
+  /// [onAuthorized] fires so the caller can remember it too.
   Future<String> sendTipFlow({
-    required String ownerAddress,
+    String? ownerAddress,
     required String amountText,
     required TipToken type,
+    void Function(WalletAuth auth)? onAuthorized,
   }) async {
-    // 1. Check the address we are about to spend from is the one this app
-    // knows. This is a local check only — the wallet itself re-authorises the
-    // session during `transact`, which is what actually gates signing.
+    // 1. Establish which address we are spending from. When the caller named
+    // one, check it against the session this app knows — a local check only,
+    // since the wallet re-authorises during `transact`, which is what actually
+    // gates signing. When it did not, whatever the wallet authorises is it, and
+    // there is nothing to compare against.
+    var owner = ownerAddress;
     final currentAuth = await WalletAuthService.instance.lastKnownWallet();
     if (currentAuth == null) {
       final auth = await WalletAuthService.instance.authorize();
       if (auth == null) throw Exception('AUTH_REQUIRED');
-      if (auth.address != ownerAddress) throw Exception('IDENTITY_MISMATCH');
-    } else if (currentAuth.address != ownerAddress) {
+      if (owner != null && auth.address != owner) {
+        throw Exception('IDENTITY_MISMATCH');
+      }
+      owner = auth.address;
+      onAuthorized?.call(auth);
+    } else if (owner == null) {
+      owner = currentAuth.address;
+    } else if (currentAuth.address != owner) {
       throw Exception('IDENTITY_MISMATCH');
     }
+    final ownerAddr = owner;
 
     // 2. Resolve decimals from the mint, then parse and validate the amount.
     final decimals = await resolveDecimals(type);
@@ -303,11 +318,11 @@ class TipService {
     if (rawAmount == null) throw Exception('INVALID_AMOUNT');
     if (type == TipToken.sol) {
       if (rawAmount < minSolLamports) throw Exception('MIN_LIMIT_SOL');
-      return _sendSolTip(ownerAddress, rawAmount);
+      return _sendSolTip(ownerAddr, rawAmount);
     }
     final minSkr = minSkrWholeTokens * _pow10(decimals);
     if (rawAmount < minSkr) throw Exception('MIN_LIMIT_SKR');
-    return _sendSkrTip(ownerAddress, rawAmount, decimals);
+    return _sendSkrTip(ownerAddr, rawAmount, decimals);
   }
 
   Future<String> _sendSolTip(String ownerAddress, int lamports) async {

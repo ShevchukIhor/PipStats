@@ -34,11 +34,14 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.pipstats.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Explicit, not flutter.minSdkVersion: the Flutter default is 24 and
+        // nothing below Android 13 has ever been run. 29 is the oldest level
+        // where scoped storage and the service model behave as designed, and it
+        // still covers every Solana Mobile device.
+        minSdk = 29
         targetSdk = 36
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)

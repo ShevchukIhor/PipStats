@@ -1,13 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:pipstats/tip_service.dart';
+import 'package:pipstats/wallet_auth.dart';
 import 'package:pipstats/l10n/app_localizations.dart';
 import 'package:pipstats/theme.dart';
 
 class TipWidget extends StatefulWidget {
-  final String walletAddress;
+  /// The wallet to spend from, when one is already connected.
+  ///
+  /// Null is normal: tipping never required a connection, because Send goes
+  /// through Seed Vault anyway. [TipService.sendTipFlow] authorises in that
+  /// case and reports the address back through [onAuthorized].
+  final String? walletAddress;
   final TipToken type;
 
-  const TipWidget({super.key, required this.walletAddress, this.type = TipToken.skr});
+  /// Called when the tip flow authorised a wallet that was not connected
+  /// before, so the app can adopt it instead of forgetting it.
+  final void Function(WalletAuth auth)? onAuthorized;
+
+  const TipWidget({
+    super.key,
+    this.walletAddress,
+    this.onAuthorized,
+    this.type = TipToken.skr,
+  });
 
   @override
   State<TipWidget> createState() => _TipWidgetState();
@@ -51,6 +66,7 @@ class _TipWidgetState extends State<TipWidget> {
         ownerAddress: widget.walletAddress,
         amountText: _amountController.text,
         type: _selectedType,
+        onAuthorized: widget.onAuthorized,
       );
 
       if (!mounted) return;

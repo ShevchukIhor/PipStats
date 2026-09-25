@@ -26,6 +26,20 @@ class BootReceiver : BroadcastReceiver() {
       return
     }
 
+    // Nothing was consented to, so nothing comes back up. Re-arming monitoring
+    // for someone who skipped onboarding would start it behind their back.
+    val consented = try {
+      MonitoringConsent.isGranted(context.applicationContext)
+    } catch (e: Exception) {
+      // A throw here would kill the process mid-boot. Stay down instead.
+      Log.w(TAG, "consent check failed: ${e.message}")
+      false
+    }
+    if (!consented) {
+      Log.i(TAG, "no monitoring consent; staying down")
+      return
+    }
+
     try {
       ForegroundService.start(context.applicationContext)
     } catch (e: Exception) {

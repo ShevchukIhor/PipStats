@@ -5,6 +5,23 @@ import 'package:flutter/services.dart';
 
 import 'stats_db.dart';
 
+/// Outcome of a CSV export.
+///
+/// Dismissing the save dialog is a decision, not a failure, so it gets its own
+/// case — reporting it as an error taught people the button was broken.
+enum ExportStatus { ok, cancelled, failed }
+
+/// Where an export ended up, when it ended up anywhere.
+class ExportResult {
+  const ExportResult(this.status, [this.name]);
+
+  final ExportStatus status;
+
+  /// The name the document provider gave the file. Providers de-duplicate on
+  /// collision, so this can differ from the name that was suggested.
+  final String? name;
+}
+
 /// Polls Android UsageStats for new foreground/background events and
 /// accumulates them into the local SQLite store (source of truth).
 class StatsService {
@@ -104,6 +121,34 @@ class StatsService {
     }
   }
 
+  /// Open this app's own "App info" screen.
+  ///
+  /// The way out of Android's restricted-settings block: the overflow menu
+  /// there holds "Allow restricted settings", without which a sideloaded
+  /// install cannot be given Usage access at all.
+  static Future<void> openOwnAppInfo() async {
+    try {
+      await _channel.invokeMethod('openOwnAppInfo');
+    } catch (e) {
+      log('openOwnAppInfo error: $e');
+    }
+  }
+
+  /// Open [url] in the device browser.
+  ///
+  /// Returns false when nothing handled it, so the caller can fall back to
+  /// showing the address instead of silently doing nothing. Only https is
+  /// accepted; the native side rejects anything else rather than letting a
+  /// stray link turn into some other intent.
+  static Future<bool> openUrl(String url) async {
+    try {
+      return await _channel.invokeMethod<bool>('openUrl', {'url': url}) ?? false;
+    } catch (e) {
+      log('openUrl error: $e');
+      return false;
+    }
+  }
+
   /// Per-package network bytes since [sinceMs].
   ///
   /// Each entry has `package`, `rx_bytes` and `tx_bytes`. Empty when usage
@@ -122,25 +167,68 @@ class StatsService {
     }
   }
 
-  /// Writes [content] into the shared Downloads folder.
+
+  /// Hands [content] to the system save dialog under the suggested [filename].
   ///
-  /// Returns the file name it actually landed under — MediaStore renames on
-  /// collision rather than overwriting, so this can differ from [filename] —
-  /// or null if the write failed.
-  static Future<String?> exportToDownloads(
+  /// The user picks the destination, so the app never writes anywhere it was
+  /// not pointed, and no storage permission is involved on any API level.
+  /// Completes only once that dialog is dismissed one way or the other.
+  static Future<ExportResult> exportCsv(
     String filename,
     String content, {
     String mime = 'text/csv',
   }) async {
     try {
-      return await _channel.invokeMethod<String>('exportToDownloads', {
+      final res = await _channel.invokeMapMethod<String, Object?>('exportCsv', {
         'filename': filename,
         'content': content,
         'mime': mime,
       });
+      switch (res?['status']) {
+        case 'ok':
+          return ExportResult(ExportStatus.ok, res?['name'] as String?);
+        case 'cancelled':
+          return const ExportResult(ExportStatus.cancelled);
+        default:
+          return const ExportResult(ExportStatus.failed);
+      }
     } catch (e) {
-      log('exportToDownloads error: $e');
-      return null;
+      log('exportCsv error: $e');
+      return const ExportResult(ExportStatus.failed);
+    }
+  }
+
+  /// Opens the system screen where Usage access is granted.
+  ///
+  /// The permission is not a runtime one, so this is as far as any app can
+  /// take the user — the switch itself is theirs to flip.
+  static Future<void> openUsageSettings() async {
+    try {
+      await _channel.invokeMethod('openUsageSettings');
+    } catch (e) {
+      log('openUsageSettings error: $e');
+    }
+  }
+
+  /// Whether the user has agreed to background monitoring.
+  ///
+  /// Answers true for installs that predate onboarding but already hold Usage
+  /// access — upgrading must not silently stop their collection.
+  static Future<bool> hasMonitoringConsent() async {
+    try {
+      return await _channel.invokeMethod<bool>('getMonitoringConsent') ?? false;
+    } catch (e) {
+      log('getMonitoringConsent error: $e');
+      // Fail closed: better to show onboarding twice than to monitor without it.
+      return false;
+    }
+  }
+
+  static Future<void> setMonitoringConsent(bool granted) async {
+    try {
+      await _channel.invokeMethod('setMonitoringConsent', {'granted': granted});
+    } catch (e) {
+      log('setMonitoringConsent error: $e');
     }
   }
 

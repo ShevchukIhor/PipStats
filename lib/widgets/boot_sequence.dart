@@ -27,8 +27,8 @@ class BootSequence extends StatefulWidget {
 
 class _BootSequenceState extends State<BootSequence> {
   static const List<String> _lines = [
-    '*** ROBCO INDUSTRIES (TM) TERMLINK ***',
-    'PIP-BOY 3000 MK IV',
+    '*** PIPSTATS TERMINAL ***',
+    'LOCAL DEVICE MONITOR',
     '',
     'INITIALIZING SUBSYSTEMS...',
     '> USAGE MONITOR      [ OK ]',

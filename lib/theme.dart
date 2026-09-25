@@ -183,6 +183,11 @@ class PipText {
   /// Body copy and secondary notes.
   static const double body = 18;
 
+  /// Running prose: onboarding, disclosures, anything read a paragraph at a
+  /// time rather than glanced at. The rest of the scale is built for key/value
+  /// rows, where 18 is plenty; a wall of VT323 at that size is not.
+  static const double reading = 20;
+
   /// The value on the right of a key/value line.
   static const double value = 18;
 
