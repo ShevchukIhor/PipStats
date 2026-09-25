@@ -60,7 +60,20 @@ https://pipstats.pages.dev/permissions
 
 ---
 
-## Permission justification (reviewer notes field)
+## Permission justification
+
+**There is no field for this in the Publisher Portal.** Confirmed by the
+developer against the live submission form: the portal takes the listing
+metadata above, but nothing where a note to the reviewer can be attached. So
+this text is not something to paste at submission time — it is the body of a
+reply to `publishersupport@dappstore.solanamobile.com` on the rejection
+thread, or of a ticket in `#dev-answers` on the Solana Mobile Discord, which
+is what the rejection mail points to.
+
+What actually reaches a reviewer who does not read either is the app itself:
+the first-run guide is blocking, so it cannot be missed, and it links to
+https://pipstats.pages.dev/permissions. That is the reason those two exist in
+the form they do rather than as a paragraph in a form field.
 
 The app's core function is measuring this device's own app usage and battery
 consumption. Permissions requested:
@@ -121,5 +134,8 @@ granting instructions) and https://pipstats.pages.dev/privacy.
 
 - [ ] versionCode 3 / versionName 1.1.1 in the built APK
 - [ ] `aapt2 dump permissions` on the release APK matches the list above
-- [ ] pipstats.pages.dev deployed with /permissions reachable
 - [ ] GitHub release v1.1.1 published (the landing page download button points at it)
+- [ ] Old Helius key revoked — it is in the published v1.1.0 APK and in git history
+
+The landing page needs no step: `web/` is wired to Cloudflare Pages through
+GitHub, so pushing publishes it.
