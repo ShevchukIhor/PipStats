@@ -48,6 +48,11 @@ docs_digest.txt
 SEED_VAULT_INTEGRATION.md
 PLAN_seed_vault_fixes.md
 defines.env
+# Release signing material — never committed, and never one `git add -A` away.
+/android/key.properties
+/android/app/keystore/
+*.jks
+*.keystore
 .env
 REVIEW.md
 sysinfo.md

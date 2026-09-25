@@ -1,0 +1,141 @@
+# dApp Store listing copy — resubmission after PER-001 / PER-002
+
+Paste-ready text for the Publisher Portal. Not consumed by any build; kept in the
+repo so the wording stays reviewable alongside the manifest it describes.
+
+Context: v1.1.0 (versionCode 2) was rejected for requesting permissions that did
+not appear necessary (PER-001) and for not disclosing sensitive permission use
+(PER-002). The reviewer compares the permission list against **this description**,
+so the description has to make device monitoring read as a primary function rather
+than an aside to the wallet features.
+
+---
+
+## Short description
+
+Track app usage and battery drain on your own device. Local only, no cloud.
+
+---
+
+## Long description
+
+PipStats is an on-device statistics tool for Android, styled as a retro CRT
+terminal. It answers two questions about your own phone: where your screen time
+actually goes, and which apps are costing you battery.
+
+WHAT IT MEASURES
+- Foreground time and launch counts for every app, per day, week and month.
+- Per-app battery drain, estimated from measured discharge rather than a nominal
+  capacity figure, with manual calibration if you know your real capacity.
+- Per-app mobile and Wi-Fi traffic.
+- Device and battery telemetry: charge counter, current, voltage, temperature,
+  CPU, memory, display and network interfaces.
+- A discharge chart and CSV export of your own usage history.
+
+Android only keeps a few days of usage history, so PipStats samples it into a
+local database before it expires. That is why a background service runs with a
+permanent notification: measurement has to continue while the app is closed, and
+the notification is your indication that it is on.
+
+PRIVACY
+There is no server, no account, no analytics and no crash reporting. Usage,
+battery and network figures are written to a local SQLite database on the device
+and are never uploaded. Deleting them is RESET STATS, or uninstalling the app.
+The CSV export is the one way data leaves the app, and only because you asked:
+it goes through the system save dialog to a file you name, so the app is granted
+that single file and nothing else. A file you exported is yours to keep or
+delete — it outlives RESET STATS and uninstalling.
+
+SOLANA WALLET (OPTIONAL)
+A separate VAULT tab connects a wallet over Mobile Wallet Adapter, backed by Seed
+Vault on Seeker. It shows SOL and token balances, NFT holdings and recent
+transactions read-only, resolves .skr domains, warns about live token approvals
+and can revoke them, and can send an optional SKR tip. Private keys and seed
+phrases never leave Seed Vault; the app only ever receives a signed result. The
+statistics side works fully offline and needs no wallet.
+
+PERMISSIONS
+Every permission and its purpose is documented at
+https://pipstats.pages.dev/permissions
+
+---
+
+## Permission justification
+
+**There is no field for this in the Publisher Portal.** Confirmed by the
+developer against the live submission form: the portal takes the listing
+metadata above, but nothing where a note to the reviewer can be attached. So
+this text is not something to paste at submission time — it is the body of a
+reply to `publishersupport@dappstore.solanamobile.com` on the rejection
+thread, or of a ticket in `#dev-answers` on the Solana Mobile Discord, which
+is what the rejection mail points to.
+
+What actually reaches a reviewer who does not read either is the app itself:
+the first-run guide is blocking, so it cannot be missed, and it links to
+https://pipstats.pages.dev/permissions. That is the reason those two exist in
+the form they do rather than as a paragraph in a form field.
+
+The app's core function is measuring this device's own app usage and battery
+consumption. Permissions requested:
+
+1. PACKAGE_USAGE_STATS (Usage access) — the core function. Source of per-app
+   foreground time and launch counts (UsageStatsManager) and per-app network
+   bytes (NetworkStatsManager). Without it the statistics screens are empty.
+   Granted by the user in Settings; the app cannot request it via a dialog, so it
+   shows a full disclosure screen (what is read, why, that it stays on-device, how
+   to revoke) before opening that Settings screen.
+
+2. FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE — Android retains only a
+   few days of usage history, so measurement must continue while the app is
+   closed. The specialUse subtype is declared in the manifest as continuous
+   on-device battery and app-usage measurement; no standard foreground service
+   type covers passive telemetry of the device itself. dataSync is not applicable
+   and its six-hour daily cap terminates the service.
+
+3. POST_NOTIFICATIONS — required on Android 13+ to display the foreground
+   service's ongoing notification, which is the user's only indication that
+   monitoring is active.
+
+4. RECEIVE_BOOT_COMPLETED — re-arms monitoring after a reboot. Without it the
+   service stays down until the app is next opened, leaving a gap in the history.
+
+5. INTERNET — read-only RPC calls to public Solana endpoints for the optional
+   wallet tab, and submission of a transaction the user signed themselves. No
+   usage, battery or network statistics are transmitted.
+
+Declared by dependencies, not by the app:
+
+6. ACCESS_NETWORK_STATE — merged in from
+   com.solanamobile:mobile-wallet-adapter-clientlib-ktx. Normal protection level.
+
+7. com.pipstats.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION — generated by
+   androidx.core. Signature-level and scoped to this package; it keeps runtime-
+   registered broadcast receivers unreachable by other apps.
+
+Removed in this version, in response to the previous review:
+
+- QUERY_ALL_PACKAGES — replaced by a scoped <queries> declaration.
+- READ_NETWORK_USAGE_HISTORY — signature|privileged and never granted to
+  store-installed apps; per-app network figures come from Usage access instead,
+  so it was inert.
+- REQUEST_IGNORE_BATTERY_OPTIMIZATIONS — the app now opens the battery
+  optimization list in Settings, which requires no permission.
+- REORDER_TASKS — declared by androidx.test:core, which reaches the release
+  classpath via mobile-wallet-adapter-clientlib-ktx 2.2.0-agp9-beta1 ->
+  androidx.test.ext:junit-ktx. Stripped with tools:node="remove".
+
+User-facing disclosure: in-app modal shown before the Usage access request, plus
+https://pipstats.pages.dev/permissions (per-permission purpose and step-by-step
+granting instructions) and https://pipstats.pages.dev/privacy.
+
+---
+
+## Pre-submission checklist
+
+- [ ] versionCode 3 / versionName 1.1.1 in the built APK
+- [ ] `aapt2 dump permissions` on the release APK matches the list above
+- [ ] GitHub release v1.1.1 published (the landing page download button points at it)
+- [ ] Old Helius key revoked — it is in the published v1.1.0 APK and in git history
+
+The landing page needs no step: `web/` is wired to Cloudflare Pages through
+GitHub, so pushing publishes it.

@@ -30,7 +30,7 @@ class ForegroundService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Device Stats Monitoring",
+                "PipStats Monitoring",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "Background monitoring of battery and app usage"

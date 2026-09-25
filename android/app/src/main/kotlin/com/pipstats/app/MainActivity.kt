@@ -5,7 +5,6 @@ import android.app.AppOpsManager
 import android.app.PendingIntent
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.app.usage.NetworkStats
@@ -20,11 +19,10 @@ import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
-import android.os.Environment
 import android.os.PowerManager
 import android.os.Process
 import android.os.StatFs
-import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.os.SystemClock
 import android.util.Base64
@@ -37,6 +35,8 @@ import java.io.BufferedReader
 import java.io.FileReader
 import java.net.NetworkInterface
 import java.util.Collections
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationManagerCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -59,6 +59,17 @@ class MainActivity : FlutterFragmentActivity() {
     const val REQ_POST_NOTIFICATIONS = 4711
   }
 
+  /**
+   * CSV export, held across the system save dialog.
+   *
+   * The picker is another activity, so the MethodChannel call cannot answer
+   * inline — the content and the pending [MethodChannel.Result] wait here
+   * until [finishCsvExport] runs.
+   */
+  private lateinit var createCsv: ActivityResultLauncher<String>
+  private var pendingCsv: String? = null
+  private var pendingCsvResult: MethodChannel.Result? = null
+
   override fun onDestroy() {
     WalletConnect.detach(this)
     super.onDestroy()
@@ -67,8 +78,18 @@ class MainActivity : FlutterFragmentActivity() {
   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
     super.configureFlutterEngine(flutterEngine)
     WalletConnect.attach(this)
-    // Start foreground service for background monitoring
-    ForegroundService.start(this)
+    // Same constraint as WalletConnect's sender: registerForActivityResult is
+    // only legal before the activity reaches STARTED, and configureFlutterEngine
+    // runs inside onCreate.
+    createCsv = registerForActivityResult(
+      ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri -> finishCsvExport(uri) }
+    // Only once the user has agreed. An install that has not been through
+    // onboarding must not put a monitoring notification on screen, and an
+    // existing Usage access grant counts as consent already given.
+    if (MonitoringConsent.reconcile(this, hasUsageAccess())) {
+      ForegroundService.start(this)
+    }
     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
       .setMethodCallHandler { call, result ->
         when (call.method) {
@@ -77,6 +98,12 @@ class MainActivity : FlutterFragmentActivity() {
             result.success(pollEvents(since))
           }
           "hasUsageAccess" -> result.success(hasUsageAccess())
+          // Where "Allow restricted settings" lives, for installs Android has
+          // flagged as sideloaded.
+          "openOwnAppInfo" -> {
+            openAppInfo(packageName)
+            result.success(null)
+          }
           "getUptimeMs" -> result.success(SystemClock.elapsedRealtime())
           "installedApps" -> result.success(installedApps())
           "getAppIconBase64" -> {
@@ -87,6 +114,10 @@ class MainActivity : FlutterFragmentActivity() {
             val pkg = call.argument<String>("package")
             if (pkg != null) openAppInfo(pkg)
             result.success(null)
+          }
+          "openUrl" -> {
+            val url = call.argument<String>("url")
+            result.success(if (url != null) openUrl(url) else false)
           }
           "openUsageSettings" -> {
             openUsageSettings()
@@ -142,15 +173,26 @@ class MainActivity : FlutterFragmentActivity() {
             val since = call.argument<Long>("since") ?: 0L
             result.success(networkUsageSince(since))
           }
-          "exportToDownloads" -> {
+          "exportCsv" -> {
             val name = call.argument<String>("filename")
             val content = call.argument<String>("content")
             if (name == null || content == null) {
               result.error("BAD_ARGS", "filename and content required", null)
             } else {
-              result.success(
-                exportToDownloads(name, content, call.argument<String>("mime") ?: "text/csv"),
-              )
+              // A pending result that never got an answer would leave its Dart
+              // Future hanging forever; close it out before taking a new one.
+              pendingCsvResult?.success(mapOf("status" to "failed"))
+              pendingCsv = content
+              pendingCsvResult = result
+              try {
+                createCsv.launch(name)
+              } catch (e: Exception) {
+                // No document provider on the device.
+                Log.w(TAG, "no save dialog: ${e.message}")
+                pendingCsv = null
+                pendingCsvResult = null
+                result.success(mapOf("status" to "failed"))
+              }
             }
           }
           "areNotificationsEnabled" -> result.success(areNotificationsEnabled())
@@ -162,6 +204,14 @@ class MainActivity : FlutterFragmentActivity() {
             result.success(isIgnoringBatteryOptimizations())
           "requestIgnoreBatteryOptimizations" -> {
             requestIgnoreBatteryOptimizations()
+            result.success(null)
+          }
+          "getMonitoringConsent" ->
+            result.success(MonitoringConsent.reconcile(this, hasUsageAccess()))
+          "setMonitoringConsent" -> {
+            val granted = call.argument<Boolean>("granted") ?: false
+            MonitoringConsent.set(this, granted)
+            if (!granted) ForegroundService.stop(this)
             result.success(null)
           }
           "isServiceRunning" -> result.success(ForegroundService.isRunning)
@@ -243,49 +293,59 @@ class MainActivity : FlutterFragmentActivity() {
   }
 
   /**
-   * Writes [content] into the shared Downloads collection and returns the
-   * display name it landed under, or null on failure.
+   * Writes the pending CSV to wherever the user pointed the save dialog.
    *
-   * Goes through MediaStore rather than a raw file path: scoped storage means
-   * an app cannot write into Downloads directly, and this route needs no
-   * runtime permission at all on Android 10+.
+   * The previous version wrote straight into the shared Downloads collection.
+   * That was silent about where the file went, left it readable by every app
+   * with media access, and outlived uninstalling this one — none of which the
+   * privacy policy admitted to. It also could not work below Android 10, where
+   * that route needs WRITE_EXTERNAL_STORAGE. Letting the user name the
+   * destination fixes all three: the grant covers exactly the one file they
+   * picked, and it needs no permission on any API level.
    *
-   * MediaStore renames on collision rather than overwriting, so the returned
-   * name can differ from the one passed in — report that name, not the one
-   * that was asked for.
+   * A null [uri] means the dialog was dismissed. That is a choice, not a
+   * failure, and the caller says so differently.
    */
-  private fun exportToDownloads(name: String, content: String, mime: String): String? = try {
-    val values = ContentValues().apply {
-      put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-      put(MediaStore.MediaColumns.MIME_TYPE, mime)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-        put(MediaStore.MediaColumns.IS_PENDING, 1)
-      }
-    }
-    val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      MediaStore.Downloads.EXTERNAL_CONTENT_URI
-    } else {
-      MediaStore.Files.getContentUri("external")
-    }
-    val uri = contentResolver.insert(collection, values)
+  private fun finishCsvExport(uri: Uri?) {
+    val content = pendingCsv
+    val result = pendingCsvResult
+    pendingCsv = null
+    pendingCsvResult = null
+    if (result == null) return
     if (uri == null) {
-      null
-    } else {
-      contentResolver.openOutputStream(uri)?.use {
-        it.write(content.toByteArray(Charsets.UTF_8))
-      }
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        contentResolver.update(uri, values, null, null)
-      }
-      contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
-        ?.use { c -> if (c.moveToFirst()) c.getString(0) else name } ?: name
+      result.success(mapOf("status" to "cancelled"))
+      return
     }
-  } catch (e: Exception) {
-    Log.w(TAG, "export failed: ${e.message}")
-    null
+    if (content == null) {
+      // The process was killed while the picker was up and took the CSV with
+      // it. The file the user picked stays empty; say so rather than lie.
+      Log.w(TAG, "export lost its content across the picker")
+      result.success(mapOf("status" to "failed"))
+      return
+    }
+    try {
+      val out = contentResolver.openOutputStream(uri)
+        ?: throw IllegalStateException("no output stream for $uri")
+      out.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+      result.success(mapOf("status" to "ok", "name" to documentName(uri)))
+    } catch (e: Exception) {
+      Log.w(TAG, "export failed: ${e.message}")
+      result.success(mapOf("status" to "failed"))
+    }
+  }
+
+  /**
+   * The name the document provider actually gave the file.
+   *
+   * Providers de-duplicate on collision, so this can differ from the name that
+   * was suggested — report what landed, not what was asked for.
+   */
+  private fun documentName(uri: Uri): String? = try {
+    contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+      ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+      ?: uri.lastPathSegment
+  } catch (_: Exception) {
+    uri.lastPathSegment
   }
 
   private fun areNotificationsEnabled(): Boolean =
@@ -312,34 +372,35 @@ class MainActivity : FlutterFragmentActivity() {
    *
    * MediaTek and other OEM builds kill background services aggressively; the
    * exemption is the only supported way to ask them not to. It is the user's
-   * decision — we can only surface the system dialog.
+   * decision — we can only surface the system screen.
+   *
+   * Reading the state needs no permission, unlike asking for it.
    */
   private fun isIgnoringBatteryOptimizations(): Boolean {
     val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return false
     return pm.isIgnoringBatteryOptimizations(packageName)
   }
 
+  /**
+   * Opens the system's battery optimization list so the user can exempt us.
+   *
+   * The targeted ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS dialog would be
+   * one tap shorter, but it requires REQUEST_IGNORE_BATTERY_OPTIMIZATIONS —
+   * a restricted-use permission that got the app rejected from the dApp Store
+   * (PER-001). The list below needs no permission at all and ends at the same
+   * toggle, so the permission was the wrong price for saving that tap.
+   */
   private fun requestIgnoreBatteryOptimizations() {
     if (isIgnoringBatteryOptimizations()) return
     try {
-      // The targeted intent is what actually shows the allow/deny dialog.
       startActivity(
-        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-          data = Uri.parse("package:$packageName")
+        Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
           addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         },
       )
     } catch (_: Exception) {
-      // Some builds hide the targeted dialog; fall back to the settings list.
-      try {
-        startActivity(
-          Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-          },
-        )
-      } catch (_: Exception) {
-        // nothing further we can do
-      }
+      // Some builds hide the list too; the app keeps working, just without
+      // the exemption.
     }
   }
 
@@ -371,6 +432,37 @@ class MainActivity : FlutterFragmentActivity() {
       startActivity(intent)
     } catch (_: Exception) {
       // ignore
+    }
+  }
+
+  /**
+   * Hands an https URL to the browser.
+   *
+   * Deliberately not url_launcher: that plugin adds a `queries` entry for
+   * https so it can resolve a handler first, which grows the very manifest
+   * surface the dApp Store review asked us to shrink. Launching an intent
+   * directly is not subject to package-visibility filtering, so no query is
+   * needed — only the https check below, so a malformed link can never turn
+   * into some other kind of intent.
+   */
+  private fun openUrl(url: String): Boolean {
+    val uri = try {
+      Uri.parse(url)
+    } catch (_: Exception) {
+      return false
+    }
+    if (!uri.scheme.equals("https", ignoreCase = true)) return false
+    return try {
+      startActivity(
+        Intent(Intent.ACTION_VIEW, uri).apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+      )
+      true
+    } catch (e: Exception) {
+      // No browser installed, or the activity refused to start.
+      Log.w(TAG, "openUrl($url): ${e.message}")
+      false
     }
   }
 

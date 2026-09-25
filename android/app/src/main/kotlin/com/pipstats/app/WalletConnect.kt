@@ -44,7 +44,7 @@ object WalletConnect {
       // host — the Pages SPA fallback answers 200 with HTML for any missing
       // path, which is why a wrong value here fails silently.
       iconUri = Uri.parse("assets/icon-192.png"),
-      identityName = "Pip-Boy Device Stats",
+      identityName = "PipStats",
     ),
   ).apply {
     // MobileWalletAdapter defaults to Solana.Devnet (verified in the 2.2.0

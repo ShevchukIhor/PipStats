@@ -90,6 +90,115 @@ class AppLocalizationsUk extends AppLocalizations {
   String get grantAccess => 'НАДАТИ ДОСТУП';
 
   @override
+  String get onboardTitle => '[ PIPSTATS ]';
+
+  @override
+  String get onboardIntroHeading => 'ЩО ЦЕ РОБИТЬ';
+
+  @override
+  String get onboardIntroBody =>
+      'PipStats вимірює, як ви користуєтесь цим пристроєм: скільки часу кожен застосунок працює на екрані, як часто ви його відкриваєте, скільки трафіку він витрачає і в що це обходиться батареї.\n\nУсе зчитується з лічильників самого Android і пишеться в базу на цьому пристрої. Ні сервера, ні акаунта, ні аналітики — тож нічого з цього нікуди не вивантажується.';
+
+  @override
+  String get onboardUsageHeading => 'ДОСТУП ДО ВИКОРИСТАННЯ';
+
+  @override
+  String get onboardRestrictedHeading => 'ТУМБЛЕР НЕ ПЕРЕМИКАЄТЬСЯ?';
+
+  @override
+  String get onboardRestrictedBody =>
+      'Якщо тумблер не реагує або зʼявилось «App was denied access» — Android позначив цю установку як стороннє встановлення й заблокував налаштування. Це не поломка, потрібен один додатковий крок.\n\n1. Відкрийте App info кнопкою нижче.\n2. Натисніть три крапки у верхньому правому куті.\n3. Оберіть «Allow restricted settings».\n4. Поверніться сюди й надайте доступ ще раз.\n\nAndroid додає цю перешкоду застосункам, встановленим поза магазином. Сам дозвіл від цього не змінюється.';
+
+  @override
+  String get onboardOpenAppInfo => 'ВІДКРИТИ APP INFO';
+
+  @override
+  String get onboardNotifHeading => 'СПОВІЩЕННЯ';
+
+  @override
+  String get onboardNotifBody =>
+      'Вимірювання триває й при закритому застосунку, тож у фоні працює сервіс із постійним сповіщенням. Саме воно показує, що збір увімкнено — Android ховає його, доки ви не дозволите сповіщення.';
+
+  @override
+  String get onboardBatteryHeading => 'ОПТИМІЗАЦІЯ БАТАРЕЇ';
+
+  @override
+  String get onboardBatteryBody =>
+      'Деякі виробники агресивно вбивають фонові сервіси. Виняток для PipStats тримає вимірювання безперервним на таких пристроях.\n\nЦе необовʼязково: без нього все працює, просто в історії можуть бути прогалини.';
+
+  @override
+  String get onboardDoneHeading => 'ГОТОВО';
+
+  @override
+  String get onboardDoneBody =>
+      'Усе це можна змінити пізніше. Кожен перемикач лишається в налаштуваннях, а кнопка СКИНУТИ СТАТИСТИКУ стирає зібране.';
+
+  @override
+  String get onboardRequired => 'ПОТРІБНО';
+
+  @override
+  String get onboardOptional => 'НЕОБОВʼЯЗКОВО';
+
+  @override
+  String get onboardGranted => 'НАДАНО';
+
+  @override
+  String get onboardLater => 'ПІЗНІШЕ';
+
+  @override
+  String get onboardBack => 'НАЗАД';
+
+  @override
+  String get onboardNext => 'ДАЛІ';
+
+  @override
+  String get onboardStart => 'ПОЧАТИ';
+
+  @override
+  String get onboardAllow => 'ДОЗВОЛИТИ';
+
+  @override
+  String get onboardPrivacyLink => 'ПОЛІТИКА ПРИВАТНОСТІ';
+
+  @override
+  String get onboardReopen => 'ПОСІБНИК НАЛАШТУВАННЯ';
+
+  @override
+  String get usageDisclosureTitle => '[ ПЕРШ НІЖ НАДАВАТИ ДОСТУП ]';
+
+  @override
+  String get usageDisclosureWhat =>
+      'ЩО ЗЧИТУЄТЬСЯ: час роботи та кількість запусків кожного застосунку, мережевий трафік на застосунок і заміри заряду батареї.';
+
+  @override
+  String get usageDisclosureWhy =>
+      'НАВІЩО: це єдине джерело, яке Android дає для статистики використання й для оцінки, які застосунки витратили заряд. Без нього екрани статистики лишаються порожніми.';
+
+  @override
+  String get usageDisclosureWhere =>
+      'КУДИ ЦЕ ЙДЕ: нікуди. Усе пишеться в локальну базу на цьому пристрої. PipStats не має ні сервера, ні акаунтів, ні аналітики й ніколи не вивантажує дані використання чи батареї.';
+
+  @override
+  String get usageDisclosureService =>
+      'ПОСТІЙНЕ СПОВІЩЕННЯ: вимірювання триває й при закритому застосунку, тож працює фоновий сервіс із постійним сповіщенням. Саме воно показує, що моніторинг увімкнено.';
+
+  @override
+  String get usageDisclosureRevoke =>
+      'ЯК ВІДКЛИКАТИ: вимкніть доступ у тому самому екрані налаштувань будь-коли або зітріть зібране кнопкою СКИНУТИ СТАТИСТИКУ.';
+
+  @override
+  String get usageDisclosureMore => 'ДОКЛАДНІШЕ ПРО ДОЗВОЛИ';
+
+  @override
+  String get usageDisclosureContinue => 'ВІДКРИТИ НАЛАШТУВАННЯ';
+
+  @override
+  String get linkCopied => 'ПОСИЛАННЯ СКОПІЙОВАНО';
+
+  @override
+  String get linkOpenFailed => 'БРАУЗЕР НЕ ЗНАЙДЕНО — ПОСИЛАННЯ СКОПІЙОВАНО';
+
+  @override
   String get seedVault => '[ SEED СХОВИЩЕ ]';
 
   @override
@@ -337,7 +446,7 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get privacyBody =>
-      'Device Stats зберігає ваші дані на пристрої. Статистика використання зберігається лише в локальній базі даних. Коли ви підключаєте гаманець, застосунок виконує лише запити читання до публічних API Solana, використовуючи вашу публічну адресу. Приватні ключі та seed-фрази ніколи не покидають захищене Seed Сховище. Жодні персональні дані не продаються та не передаються. Повну політику див. у PRIVACY.md.';
+      'PipStats зберігає ваші дані на пристрої. Статистика використання зберігається лише в локальній базі даних. Коли ви підключаєте гаманець, застосунок виконує лише запити читання до публічних API Solana, використовуючи вашу публічну адресу. Приватні ключі та seed-фрази ніколи не покидають захищене Seed Сховище. Жодні персональні дані не продаються та не передаються. Повна політика — https://pipstats.pages.dev/privacy, деталі про дозволи — https://pipstats.pages.dev/permissions.';
 
   @override
   String get close => 'ЗАКРИТИ';
@@ -379,11 +488,11 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String get appDescription =>
-      'Device Stats відстежує час роботи та запуски додатків локально. Хмарка відсутня, трекінг відсутній. Створено для Solana Mobile.';
+      'PipStats відстежує час роботи та запуски додатків локально. Хмарка відсутня, трекінг відсутній. Створено для Solana Mobile.';
 
   @override
   String get termsBody =>
-      'Device Stats (\"Додаток\") надається як є без гарантій. Дані використання залишаються на вашому пристрої. Розробник не несе відповідальності за будь-які збитки. Користуючись Додатком, ви приймаєте ці умови. Повні умови на https://pipstats.pages.dev/terms';
+      'PipStats (\"Додаток\") надається як є без гарантій. Дані використання залишаються на вашому пристрої. Розробник не несе відповідальності за будь-які збитки. Користуючись Додатком, ви приймаєте ці умови. Повні умови на https://pipstats.pages.dev/terms';
 
   @override
   String get tipButton => 'ТІП';
@@ -411,9 +520,6 @@ class AppLocalizationsUk extends AppLocalizations {
   }
 
   @override
-  String get tipNoWallet => 'СПОЧАТКУ ПІДКЛЮЧІТЬ ГАМАНЕЦЬ';
-
-  @override
   String get tipInvalidAmount => 'НЕВІРНА СУМА';
 
   @override
@@ -435,7 +541,7 @@ class AppLocalizationsUk extends AppLocalizations {
   String get tipInsufficientSkr => 'НЕДОСТАТНЬО SKR';
 
   @override
-  String get aboutTitle => 'ПРО DEVICE STATS';
+  String get aboutTitle => 'ПРО PIPSTATS';
 
   @override
   String get website => 'ВЕБСАЙТ';
@@ -507,8 +613,11 @@ class AppLocalizationsUk extends AppLocalizations {
 
   @override
   String exportDone(String name) {
-    return 'Збережено в Downloads: $name';
+    return 'Експортовано: $name';
   }
+
+  @override
+  String get exportCancelled => 'Експорт скасовано';
 
   @override
   String get exportFailed => 'Експорт не вдався';

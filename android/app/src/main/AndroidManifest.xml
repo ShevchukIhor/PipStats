@@ -3,7 +3,9 @@
     <application
         android:label="PipStats"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -30,8 +32,20 @@
             android:exported="false" />
         <!-- Re-arms monitoring after a reboot: without it the service stayed
              down until the user next opened the app, leaving a gap in the
-             usage history. directBootAware so it also fires before first
-             unlock on devices with FBE. -->
+             usage history.
+
+             directBootAware lets the receiver *run* before first unlock, but
+             it cannot start monitoring that early: ForegroundService is not
+             directBootAware, so until the user unlocks, the system answers the
+             start with "Unable to start service ...: not found" (verified on a
+             Seeker, 2026-09-25). Collection therefore resumes at
+             BOOT_COMPLETED, not at LOCKED_BOOT_COMPLETED. Making it genuinely
+             Direct Boot capable would mean marking the service too and moving
+             its database into device-protected storage.
+
+             Anything this receiver touches before unlock must live in
+             device-protected storage — see MonitoringConsent, which crashed
+             the whole process here until it did. -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true"
@@ -64,17 +78,17 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions"/>
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission"/>
-    <!-- Reading other apps' network usage needs this alongside the usage
-         access grant the app already requires. -->
-    <uses-permission android:name="android.permission.READ_NETWORK_USAGE_HISTORY"
-        tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <!-- Declared by androidx.test:core, which reaches the RELEASE classpath
+         through mobile-wallet-adapter-clientlib-ktx:2.2.0-agp9-beta1 ->
+         androidx.test.ext:junit-ktx. That beta packages a test dependency as a
+         regular one; nothing in the app or in wallet signing reorders a task,
+         so the permission is stripped rather than shipped. -->
+    <uses-permission android:name="android.permission.REORDER_TASKS"
+        tools:node="remove"/>
     <queries>
         <!-- Mobile Wallet Adapter: makes wallet apps visible on Android 11+
              package-visibility rules without relying on QUERY_ALL_PACKAGES. -->

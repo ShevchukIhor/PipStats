@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Nothing this app holds is meant to leave the device: usage history, battery
+  samples and the connected wallet address all live in app-private storage and
+  are rebuilt by measuring again. allowBackup="false" already stops cloud
+  backup; these rules additionally stop device-to-device transfer on Android
+  12+, so the privacy policy's "never backed up" claim holds on every path.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

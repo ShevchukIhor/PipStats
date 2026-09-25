@@ -89,6 +89,115 @@ class AppLocalizationsEn extends AppLocalizations {
   String get grantAccess => 'GRANT ACCESS';
 
   @override
+  String get onboardTitle => '[ PIPSTATS ]';
+
+  @override
+  String get onboardIntroHeading => 'WHAT THIS DOES';
+
+  @override
+  String get onboardIntroBody =>
+      'PipStats measures how you use this device: how long each app spends in the foreground, how often you open it, how much data it moves, and what it costs your battery.\n\nEverything is read from Android\'s own counters and written to a database on this device. There is no server, no account and no analytics, so none of it is ever uploaded.';
+
+  @override
+  String get onboardUsageHeading => 'USAGE ACCESS';
+
+  @override
+  String get onboardRestrictedHeading => 'SWITCH GREYED OUT?';
+
+  @override
+  String get onboardRestrictedBody =>
+      'If the switch does nothing, or you saw \"App was denied access\", Android has flagged this install as sideloaded and blocked the setting. It is not broken — it needs one extra step.\n\n1. Open App info below.\n2. Tap the three dots in the top-right corner.\n3. Choose \"Allow restricted settings\".\n4. Come back here and grant usage access again.\n\nAndroid adds this hurdle to apps installed outside an app store. Nothing about the permission itself changes.';
+
+  @override
+  String get onboardOpenAppInfo => 'OPEN APP INFO';
+
+  @override
+  String get onboardNotifHeading => 'NOTIFICATIONS';
+
+  @override
+  String get onboardNotifBody =>
+      'Measuring continues while the app is closed, so a background service runs with a permanent notification. That notification is your only sign that collection is on — Android hides it until you allow notifications.';
+
+  @override
+  String get onboardBatteryHeading => 'BATTERY OPTIMIZATION';
+
+  @override
+  String get onboardBatteryBody =>
+      'Some manufacturers kill background services aggressively. Exempting PipStats keeps measurement continuous on those devices.\n\nThis one is optional: everything works without it, you may just find gaps in the history.';
+
+  @override
+  String get onboardDoneHeading => 'READY';
+
+  @override
+  String get onboardDoneBody =>
+      'You can change any of this later. Settings holds every switch, and RESET STATS clears what was collected.';
+
+  @override
+  String get onboardRequired => 'REQUIRED';
+
+  @override
+  String get onboardOptional => 'OPTIONAL';
+
+  @override
+  String get onboardGranted => 'GRANTED';
+
+  @override
+  String get onboardLater => 'LATER';
+
+  @override
+  String get onboardBack => 'BACK';
+
+  @override
+  String get onboardNext => 'NEXT';
+
+  @override
+  String get onboardStart => 'START';
+
+  @override
+  String get onboardAllow => 'ALLOW';
+
+  @override
+  String get onboardPrivacyLink => 'PRIVACY POLICY';
+
+  @override
+  String get onboardReopen => 'SETUP GUIDE';
+
+  @override
+  String get usageDisclosureTitle => '[ BEFORE YOU GRANT ACCESS ]';
+
+  @override
+  String get usageDisclosureWhat =>
+      'WHAT IS READ: per-app foreground time and launch counts, per-app network bytes, and battery charge samples.';
+
+  @override
+  String get usageDisclosureWhy =>
+      'WHY: this is the only source Android offers for app usage and for estimating which apps drained your battery. Without it the statistics screens stay empty.';
+
+  @override
+  String get usageDisclosureWhere =>
+      'WHERE IT GOES: nowhere. Everything is written to a local database on this device. PipStats has no server, no account and no analytics, and never uploads usage or battery data.';
+
+  @override
+  String get usageDisclosureService =>
+      'ONGOING NOTIFICATION: measuring continues while the app is closed, so a foreground service runs with a permanent notification. That notification is your indicator that monitoring is on.';
+
+  @override
+  String get usageDisclosureRevoke =>
+      'REVOKING: turn Usage access off in the same settings screen at any time, or clear what was collected with RESET STATS.';
+
+  @override
+  String get usageDisclosureMore => 'READ MORE ABOUT PERMISSIONS';
+
+  @override
+  String get usageDisclosureContinue => 'OPEN SETTINGS';
+
+  @override
+  String get linkCopied => 'LINK COPIED';
+
+  @override
+  String get linkOpenFailed => 'NO BROWSER FOUND — LINK COPIED';
+
+  @override
   String get seedVault => '[ SEED VAULT ]';
 
   @override
@@ -336,7 +445,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get privacyBody =>
-      'Device Stats keeps your data on-device. Usage statistics are stored only in a local database. When you connect a wallet, the app performs read-only queries to public Solana APIs using your public address. Private keys and seed phrases never leave the secure Seed Vault. No personal data is sold or shared. See PRIVACY.md for the full policy.';
+      'PipStats keeps your data on-device. Usage statistics are stored only in a local database. When you connect a wallet, the app performs read-only queries to public Solana APIs using your public address. Private keys and seed phrases never leave the secure Seed Vault. No personal data is sold or shared. Full policy at https://pipstats.pages.dev/privacy, permission details at https://pipstats.pages.dev/permissions.';
 
   @override
   String get close => 'CLOSE';
@@ -378,11 +487,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get appDescription =>
-      'Device Stats tracks app foreground time and launch counts locally. No cloud, no tracking. Built for Solana Mobile.';
+      'PipStats tracks app foreground time and launch counts locally. No cloud, no tracking. Built for Solana Mobile.';
 
   @override
   String get termsBody =>
-      'Device Stats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms';
+      'PipStats (\"the App\") is provided as-is without warranty. Usage data stays on your device. The developer is not liable for any damages. By using the App, you accept these terms. Full terms at https://pipstats.pages.dev/terms';
 
   @override
   String get tipButton => 'TIP';
@@ -410,9 +519,6 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
-  String get tipNoWallet => 'CONNECT WALLET FIRST';
-
-  @override
   String get tipInvalidAmount => 'INVALID AMOUNT';
 
   @override
@@ -434,7 +540,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tipInsufficientSkr => 'INSUFFICIENT SKR BALANCE';
 
   @override
-  String get aboutTitle => 'ABOUT DEVICE STATS';
+  String get aboutTitle => 'ABOUT PIPSTATS';
 
   @override
   String get website => 'WEBSITE';
@@ -505,8 +611,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String exportDone(String name) {
-    return 'Saved to Downloads: $name';
+    return 'Exported: $name';
   }
+
+  @override
+  String get exportCancelled => 'Export cancelled';
 
   @override
   String get exportFailed => 'Export failed';

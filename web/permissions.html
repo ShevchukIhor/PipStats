@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Permissions — PipStats</title>
+  <meta name="description" content="Every Android permission PipStats requests, why it is needed, and step-by-step instructions for granting each one.">
+  <meta name="theme-color" content="#00FF00">
+  <link rel="icon" type="image/png" href="assets/favicon.png">
+  <link rel="apple-touch-icon" href="assets/logo-icon.png">
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <div class="wrap nav">
+      <a class="brand" href="index.html" aria-label="PipStats home">
+        <img src="assets/logo.png" alt="PipStats">
+      </a>
+      <ul>
+        <li><a href="index.html#features">FEATURES</a></li>
+        <li><a href="index.html#download">DOWNLOAD</a></li>
+        <li><a href="permissions.html">PERMISSIONS</a></li>
+        <li><a href="terms.html">TERMS</a></li>
+        <li><a href="privacy.html">PRIVACY</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <main class="wrap legal">
+    <p class="back"><a href="index.html">HOME</a></p>
+    <h1>PERMISSIONS</h1>
+    <p class="updated">LAST UPDATED: SEPTEMBER 2026</p>
+
+    <p>PipStats measures how you use this device: how long each app spends in the
+    foreground, how often it is opened, how much network traffic it moves, and how
+    much battery it costs you. All of that is read from Android's own usage APIs and
+    written to a local database on the device. There is no server, no account and no
+    analytics, so none of it is ever uploaded &mdash; see the
+    <a href="privacy.html">Privacy Policy</a>.</p>
+
+    <p>This page lists every permission in the installed package, what it is for, and
+    how to grant the ones Android will not grant automatically.</p>
+
+    <h2>1. Permissions the app requests</h2>
+
+    <table class="perms">
+      <thead>
+        <tr><th>Permission</th><th>What it is used for</th><th>Required?</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-label="PERMISSION"><code>PACKAGE_USAGE_STATS</code><br>"Usage access"</td>
+          <td data-label="USED FOR">The core of the app. Reads per-app foreground time and launch
+          counts from <code>UsageStatsManager</code>, and per-app network bytes from
+          <code>NetworkStatsManager</code>. Everything on the SYSTEM tab and every
+          per-app battery estimate is derived from it.</td>
+          <td data-label="REQUIRED?">Yes &mdash; without it the statistics screens are empty.</td>
+        </tr>
+        <tr>
+          <td data-label="PERMISSION"><code>FOREGROUND_SERVICE</code><br><code>FOREGROUND_SERVICE_SPECIAL_USE</code></td>
+          <td data-label="USED FOR">Keeps measurement running while the app is closed. Android only
+          holds a few days of usage history, so the service samples it into the local
+          database before it expires. The <code>specialUse</code> subtype is declared as
+          continuous on-device battery and app-usage measurement; no standard service
+          type covers passive telemetry of the device itself.</td>
+          <td data-label="REQUIRED?">Yes &mdash; without it history has gaps whenever the app is closed.</td>
+        </tr>
+        <tr>
+          <td data-label="PERMISSION"><code>POST_NOTIFICATIONS</code></td>
+          <td data-label="USED FOR">Shows the ongoing notification for that service. It is the only
+          indication that monitoring is running, which is why the app asks for it rather
+          than running invisibly.</td>
+          <td data-label="REQUIRED?">Yes on Android 13+ &mdash; otherwise the service runs with its
+          notification suppressed.</td>
+        </tr>
+        <tr>
+          <td data-label="PERMISSION"><code>RECEIVE_BOOT_COMPLETED</code></td>
+          <td data-label="USED FOR">Restarts monitoring after a reboot. Without it the service stays
+          down until you next open the app, leaving a hole in the history.</td>
+          <td data-label="REQUIRED?">Yes, for uninterrupted history.</td>
+        </tr>
+        <tr>
+          <td data-label="PERMISSION"><code>INTERNET</code></td>
+          <td data-label="USED FOR">Read-only RPC calls to public Solana endpoints, used only by the
+          VAULT tab to show balances and token holdings for an address you connect, and to
+          submit a tip transaction you signed yourself. No usage or battery data is sent.</td>
+          <td data-label="REQUIRED?">Only for the wallet features. Statistics work offline.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>2. Permissions added by libraries, not by the app</h2>
+    <p>Two entries in the package's permission list come from dependencies through
+    Android's manifest merger. The app never calls them directly.</p>
+    <table class="perms">
+      <thead>
+        <tr><th>Permission</th><th>Source</th><th>Effect</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td data-label="PERMISSION"><code>ACCESS_NETWORK_STATE</code></td>
+          <td data-label="SOURCE"><code>com.solanamobile:mobile-wallet-adapter-clientlib-ktx</code></td>
+          <td data-label="EFFECT">Normal-level. Lets the wallet library check whether a connection
+          exists before attempting an RPC call.</td>
+        </tr>
+        <tr>
+          <td data-label="PERMISSION"><code>com.pipstats.app.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION</code></td>
+          <td data-label="SOURCE">Generated by <code>androidx.core</code></td>
+          <td data-label="EFFECT">A signature-level permission the app defines for itself, so that
+          broadcast receivers registered at runtime are not reachable by other apps. It
+          grants nothing outside this package.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>3. Things that need no permission at all</h2>
+    <p>Worth stating, because people reasonably expect otherwise:</p>
+    <ul>
+      <li><strong>Exporting your usage table as CSV.</strong> The app opens the
+      system save dialog; you choose the folder and the file name, and Android
+      grants the app access to that one file. No storage permission is involved,
+      and the app cannot see anything else in the location you picked &mdash; nor
+      read the file back afterwards.</li>
+      <li><strong>Opening a link from the app.</strong> Links hand off to your
+      browser through a normal intent.</li>
+    </ul>
+
+    <h2>4. Permissions removed</h2>
+    <p>Earlier builds declared four permissions that this version no longer requests.
+    They are listed here so the change is verifiable rather than merely claimed:</p>
+    <ul>
+      <li><code>QUERY_ALL_PACKAGES</code> &mdash; replaced by a scoped
+      <code>&lt;queries&gt;</code> declaration, which is enough to label the apps in
+      your own usage list.</li>
+      <li><code>READ_NETWORK_USAGE_HISTORY</code> &mdash; a privileged permission that
+      is never granted to store-installed apps. Per-app network figures come from
+      Usage access instead, so it did nothing.</li>
+      <li><code>REQUEST_IGNORE_BATTERY_OPTIMIZATIONS</code> &mdash; the app now opens
+      the battery optimization list in Settings, which needs no permission and ends at
+      the same switch.</li>
+      <li><code>REORDER_TASKS</code> &mdash; declared by <code>androidx.test:core</code>,
+      an Android test library that a beta build of the wallet client pulls into the
+      release classpath. Neither the app nor wallet signing reorders a task, so the
+      permission is stripped from the merged manifest.</li>
+    </ul>
+
+    <h2>5. How to grant them</h2>
+    <p>Exact wording differs between manufacturers; the order below is the order you
+    will meet them.</p>
+
+    <div class="steps">
+      <div class="step">
+        <h3>A. USAGE ACCESS &mdash; required</h3>
+        <p>Android does not offer a pop-up for this one, so it cannot be requested from
+        inside the app. The GRANT ACCESS button only opens the right Settings screen;
+        the switch itself has to be flipped there.</p>
+        <span class="path">Settings &rsaquo; Apps &rsaquo; Special app access &rsaquo; Usage access &rsaquo; PipStats &rsaquo; Permit usage access</span>
+        <p>On some skins the same screen is at <em>Settings &rsaquo; Security &amp; privacy
+        &rsaquo; More &rsaquo; Special app access</em>, or <em>Settings &rsaquo; Privacy
+        protection &rsaquo; Special permissions</em>. Searching Settings for
+        "usage access" finds it on every build.</p>
+        <p class="miss">Without it: the SYSTEM tab stays empty, per-app battery estimates
+        cannot be produced, and per-app network figures are unavailable.</p>
+
+        <h4>If the switch will not move</h4>
+        <p>This is the step almost everyone gets stuck on, and it is not the app's
+        doing. When Android decides an install came from outside an app store &mdash;
+        an APK opened from a browser or a file manager &mdash; it puts Usage access
+        behind a block called <em>restricted settings</em>. The switch looks normal
+        but does nothing, and tapping it shows:</p>
+        <p><em>"App was denied access &mdash; Access to this permission can put your
+        personal and financial info at risk."</em></p>
+        <p>Nothing is wrong with the permission or the app; Android wants one
+        deliberate step first:</p>
+        <ol>
+          <li>Go to <em>Settings &rsaquo; Apps &rsaquo; PipStats</em>. (In the app, the
+          setup guide has an OPEN APP INFO button that lands here.)</li>
+          <li>Tap the three dots <strong>&#8942;</strong> in the top-right corner.</li>
+          <li>Choose <em>Allow restricted settings</em>. On some builds it is
+          <em>Allow restricted setting</em>, singular.</li>
+          <li>Go back to Usage access and flip the switch &mdash; it now works.</li>
+        </ol>
+        <p>If the three-dot menu has no such entry, this install is not restricted and
+        the switch should already work; check that you are looking at PipStats and not
+        a similarly named row.</p>
+        <p class="miss">Every app that measures screen time needs this same switch, so
+        the block is worth knowing about beyond this one app.</p>
+      </div>
+
+      <div class="step">
+        <h3>B. NOTIFICATIONS &mdash; required on Android 13+</h3>
+        <p>Asked once as a standard system dialog on first launch. If it was dismissed
+        or denied:</p>
+        <span class="path">Settings &rsaquo; Apps &rsaquo; PipStats &rsaquo; Notifications &rsaquo; Allow notifications</span>
+        <p class="miss">Without it: monitoring still runs, but its ongoing notification is
+        hidden, so nothing tells you whether collection is active.</p>
+      </div>
+
+      <div class="step">
+        <h3>C. BATTERY OPTIMIZATION &mdash; optional</h3>
+        <p>Android's power management can stop background services. Exempting PipStats
+        keeps measurement continuous on devices that are aggressive about it.</p>
+        <span class="path">Settings &rsaquo; Apps &rsaquo; Special app access &rsaquo; Battery optimization &rsaquo; All apps &rsaquo; PipStats &rsaquo; Don't optimize</span>
+        <p class="miss">Without it: everything works, but on some hardware the background
+        service is killed and the usage history gains gaps.</p>
+      </div>
+
+      <div class="step">
+        <h3>D. AUTOSTART &mdash; optional, some manufacturers only</h3>
+        <p>Xiaomi/Redmi (MIUI, HyperOS), Huawei/Honor, Oppo, Realme, Vivo and iQOO add
+        their own autostart switch on top of Android's. It is usually under
+        <em>Security &rsaquo; Permissions &rsaquo; Autostart</em> or
+        <em>Settings &rsaquo; Apps &rsaquo; PipStats &rsaquo; Allow auto-launch</em>.</p>
+        <p class="miss">Without it: monitoring does not come back by itself after a reboot
+        until you open the app.</p>
+      </div>
+    </div>
+
+    <h2>6. Revoking</h2>
+    <p>Usage access can be switched off again at any time on the same Settings screen;
+    the app keeps running, it simply stops collecting. To delete what was already
+    collected, use RESET STATS in the app, or uninstall it &mdash; the database lives
+    in the app's private storage and goes with it.</p>
+
+    <h2>7. Questions</h2>
+    <p>Open an issue at <a href="https://github.com/ShevchukIhor/PipStats">https://github.com/ShevchukIhor/PipStats</a>.</p>
+  </main>
+
+  <footer class="wrap">
+    <div class="links">
+      <a href="https://github.com/ShevchukIhor/PipStats">GITHUB</a><span>|</span>
+      <a href="permissions.html">PERMISSIONS</a><span>|</span>
+      <a href="terms.html">TERMS</a><span>|</span>
+      <a href="privacy.html">PRIVACY</a>
+    </div>
+    <p class="copy">2026 PIPSTATS &bull; NO CLOUD &bull; NO TRACKING &bull; BUILT FOR SOLANA MOBILE</p>
+  </footer>
+</body>
+</html>

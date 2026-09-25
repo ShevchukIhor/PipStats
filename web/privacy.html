@@ -20,6 +20,7 @@
       <ul>
         <li><a href="index.html#features">FEATURES</a></li>
         <li><a href="index.html#download">DOWNLOAD</a></li>
+        <li><a href="permissions.html">PERMISSIONS</a></li>
         <li><a href="terms.html">TERMS</a></li>
         <li><a href="privacy.html">PRIVACY</a></li>
       </ul>
@@ -52,15 +53,18 @@
       <li>Enabling optional SKR token tipping via Seed Vault</li>
     </ul>
 
+    <p>Each Android permission the App requests, and what it is used for, is listed on the <a href="permissions.html">Permissions</a> page.</p>
+
     <h2>4. Storage &amp; Security</h2>
-    <p>All data is stored in a local SQLite database (sqflite) on your device's internal storage. The database is not backed up to cloud services. The App does not implement any network sync for user data. Wallet private keys and seed phrases never leave the Seed Vault hardware enclave; the App only receives signed transaction results.</p>
+    <p>All data is stored in a local SQLite database (sqflite) on your device's internal storage. The database is not backed up to cloud services or transferred to a new device. The App does not implement any network sync for user data. Wallet private keys and seed phrases never leave the Seed Vault hardware enclave; the App only receives signed transaction results.</p>
+    <p>The one exception is the CSV export, which you start yourself. The App opens the system save dialog and writes only to the file you name there; it is granted access to that single file and to nowhere else. From that moment the file belongs to the location you chose, not to the App, and the App can neither read it back nor delete it.</p>
 
     <h2>5. Data Sharing</h2>
     <p>Your data is never sold, rented, or shared with third parties. The only external communication is:</p>
     <ul>
-      <li>Read-only RPC calls to public Solana endpoints (your public address)</li>
-      <li>Optional Helius API calls for token/NFT metadata (public address only)</li>
+      <li>Read-only RPC calls to a public Solana endpoint (your public address). Token and NFT metadata is read from on-chain accounts over that same endpoint, not from a separate metadata service.</li>
       <li>.skr domain resolution via AllDomains (public domain query)</li>
+      <li>Submitting a tip transaction that you signed yourself, if you choose to send one</li>
     </ul>
     <p>No usage statistics, battery data, or calibration data ever leaves your device.</p>
 
@@ -70,6 +74,7 @@
     <h2>7. Data Retention</h2>
     <ul>
       <li>Usage statistics: cleared via "RESET STATS" button or app uninstall</li>
+      <li>Exported CSV files: <strong>not</strong> covered by either — a file you exported survives both "RESET STATS" and uninstalling the App, and is deleted wherever you saved it</li>
       <li>Battery samples: cleared via app uninstall</li>
       <li>Wallet connection: cleared via "REMOVE" button or app uninstall</li>
       <li>Calibration: persists across sessions until manually reset</li>
@@ -79,14 +84,13 @@
     <ul>
       <li>Access: View all data in the App's UI (SYSTEM, SYSINFO, VAULT tabs)</li>
       <li>Rectification: Manually calibrate battery capacity</li>
-      <li>Erasure: Use "RESET STATS" or uninstall the App</li>
-      <li>Portability: Data is in standard SQLite format (accessible via adb)</li>
+      <li>Erasure: Use "RESET STATS" or uninstall the App. Files you exported yourself are outside the App's reach — delete them where you saved them</li>
+      <li>Portability: Export the usage table as CSV from the SYSTEM tab, saving it wherever you choose</li>
     </ul>
 
     <h2>9. Third-Party Services</h2>
     <ul>
-      <li>Public Solana RPC endpoints (Solana Foundation, Helius, etc.)</li>
-      <li>Helius API (optional, for enhanced token/NFT metadata)</li>
+      <li>A public Solana RPC endpoint (Solana Foundation by default; a Helius RPC endpoint may be configured at build time as an alternative)</li>
       <li>AllDomains / ANS (for .skr domain resolution)</li>
     </ul>
     <p>These services receive only your public wallet address or domain query. Review their privacy policies separately.</p>
@@ -102,6 +106,12 @@
   </main>
 
   <footer class="wrap">
+    <div class="links">
+      <a href="https://github.com/ShevchukIhor/PipStats">GITHUB</a><span>|</span>
+      <a href="permissions.html">PERMISSIONS</a><span>|</span>
+      <a href="terms.html">TERMS</a><span>|</span>
+      <a href="privacy.html">PRIVACY</a>
+    </div>
     <p class="copy">2026 PIPSTATS &bull; NO CLOUD &bull; NO TRACKING &bull; BUILT FOR SOLANA MOBILE</p>
   </footer>
 </body>

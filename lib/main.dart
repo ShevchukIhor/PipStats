@@ -16,13 +16,25 @@ import 'theme.dart';
 import 'widgets/battery_chart.dart';
 import 'widgets/boot_sequence.dart';
 import 'widgets/crt_overlay.dart';
+import 'widgets/onboarding.dart';
 import 'l10n/app_localizations.dart';
 import 'package:pipstats/widgets/tip_widget.dart';
+
+/// Public pages the app links out to.
+///
+/// [_permissionsUrl] is referenced from both the usage-access disclosure and
+/// the INFO tab, so it lives here rather than being spelled twice.
+const _siteUrl = 'https://pipstats.pages.dev';
+const _permissionsUrl = '$_siteUrl/permissions';
+const _termsUrl = '$_siteUrl/terms';
+const _privacyUrl = '$_siteUrl/privacy';
+const _githubUrl = 'https://github.com/ShevchukIhor/PipStats';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final initialTheme = await _readInitialTheme();
-  runApp(DeviceStatsApp(initialTheme: initialTheme));
+  final onboarded = await StatsService.hasMonitoringConsent();
+  runApp(DeviceStatsApp(initialTheme: initialTheme, onboarded: onboarded));
 }
 
 Future<DeviceStatsTheme> _readInitialTheme() async {
@@ -67,9 +79,17 @@ class DeviceStatsScope extends InheritedWidget {
 }
 
 class DeviceStatsApp extends StatefulWidget {
-  const DeviceStatsApp({required this.initialTheme, super.key});
+  const DeviceStatsApp({
+    required this.initialTheme,
+    required this.onboarded,
+    super.key,
+  });
 
   final DeviceStatsTheme initialTheme;
+
+  /// False on a fresh install, and on any install that has not yet agreed to
+  /// background monitoring.
+  final bool onboarded;
 
   @override
   State<DeviceStatsApp> createState() => _DeviceStatsAppState();
@@ -81,6 +101,17 @@ class _DeviceStatsAppState extends State<DeviceStatsApp> {
   /// False until the boot sequence finishes (or is tapped through). Held here
   /// rather than in HomePage so it runs once per cold start, not on rebuild.
   bool _booted = false;
+
+  late bool _onboarded = widget.onboarded;
+
+  /// Records consent and brings monitoring up, which is the first moment the
+  /// service is allowed to start.
+  Future<void> _finishOnboarding() async {
+    await StatsService.setMonitoringConsent(true);
+    await StatsService.startForegroundService();
+    await StatsService.scheduleSync();
+    if (mounted) setState(() => _onboarded = true);
+  }
 
   DeviceStatsColors get _colors => switch (_theme) {
     DeviceStatsTheme.pipboy => DeviceStatsColors.pipboy,
@@ -99,7 +130,7 @@ class _DeviceStatsAppState extends State<DeviceStatsApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'DEVICE STATS',
+      title: 'PipStats',
       debugShowCheckedModeBanner: false,
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -115,9 +146,11 @@ class _DeviceStatsAppState extends State<DeviceStatsApp> {
         // The CRT layer wraps the whole app so scanlines and the vignette
         // cover dialogs and sheets too, not just the page body.
         child: CrtOverlay(
-          child: _booted
-              ? const HomePage()
-              : BootSequence(onDone: () => setState(() => _booted = true)),
+          child: !_booted
+              ? BootSequence(onDone: () => setState(() => _booted = true))
+              : _onboarded
+                  ? const HomePage()
+                  : Onboarding(onDone: _finishOnboarding),
         ),
       ),
     );
@@ -299,6 +332,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// database or disturbs the totals the percentages are computed against.
   String _appQuery = '';
 
+  /// Whether the app filter is expanded. Collapsed by default: a rarely-used
+  /// tool was permanently occupying a band of the main screen.
+  bool _searchOpen = false;
+  final _searchFocus = FocusNode();
+
   /// Samples backing the battery chart, for the period on screen.
   List<BatteryPoint> _batteryPoints = const [];
 
@@ -323,6 +361,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Timer? _pollTimer;
   static const int _refreshInterval = 60;
   int _refreshCountdown = _refreshInterval;
+
+  /// How often the vault re-reads the chain while a wallet is connected.
+  ///
+  /// Five minutes rather than the 60s used for usage stats: on-chain balances
+  /// move far more slowly, and an app whose whole point is measuring battery
+  /// drain should not be the thing waking the radio every minute.
+  static const int _vaultRefreshInterval = 300;
+  int _vaultCountdown = _vaultRefreshInterval;
 
   // Vault / on-chain state
   int _tab = 0; // 0 = SYSTEM, 1 = VAULT, 2 = SYSINFO, 3 = INFO
@@ -360,11 +406,29 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pollTimer = Timer.periodic(Duration(seconds: 1), (_) => _pollTick());
   }
 
+  /// A scan nobody asked for, run only when it can be seen and afforded.
+  ///
+  /// Gated on the vault being the visible tab: without a key the app is on the
+  /// free public RPC, which answers repeated scans with HTTP 429, and polling
+  /// the chain behind a screen the user is not looking at spends their battery
+  /// and their rate limit for nothing.
+  void _maybeRefreshVault() {
+    if (_tab != 1 || _walletAddress == null || _vaultBusy) return;
+    _vaultCountdown = _vaultRefreshInterval;
+    unawaited(_loadVaultData(background: true));
+  }
+
   void _pollTick() {
     _refreshCountdown--;
     if (_refreshCountdown <= 0) {
       _refreshCountdown = _refreshInterval;
       _syncAndRefresh();
+    }
+    _vaultCountdown--;
+    if (_vaultCountdown <= 0) {
+      // Reset regardless, so a skipped tick does not retry every second.
+      _vaultCountdown = _vaultRefreshInterval;
+      _maybeRefreshVault();
     }
     if (mounted) setState(() {});
   }
@@ -378,6 +442,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _checkAccess();
       _syncAndRefresh();
+      // Coming back is a natural moment to re-check the balance, and the
+      // countdown does not run while the app is away.
+      _maybeRefreshVault();
       // Both can change while we are away: the service may be killed by the
       // system, and the exemption is granted in a separate activity.
       _refreshMonitoringHealth();
@@ -390,6 +457,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _pollTimer?.cancel();
     _addressController.dispose();
     _searchController.dispose();
+    _searchFocus.dispose();
     super.dispose();
   }
 
@@ -429,57 +497,68 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final v = await StatsDb.instance.getMeta('battery_chart_expanded');
       if (v != null) _batteryExpanded = v == '1';
     }
-    // Load vault data from database if wallet is connected.
-    if (_walletAddress != null) {
-      try {
-        final accounts = await StatsDb.instance.loadVaultTokenAccounts(_walletAddress!);
-        final assets = await StatsDb.instance.loadVaultAssets(_walletAddress!);
-        final txs = await StatsDb.instance.loadVaultTxs(_walletAddress!);
-        if (mounted) {
-          setState(() {
-            _tokenAccounts = accounts
-                .map((a) {
-                      final info = TokenAccountInfo(
-                        mint: a['mint'] as String,
-                        owner: a['owner'] as String,
-                        amount: a['amount'] as int,
-                        delegate: a['delegate'] as String?,
-                        state: a['state'] as int,
-                        delegatedAmount: a['delegated_amount'] as int,
-                        closeAuthority: a['close_authority'] as String?,
-                        isNative: a['is_native'] == 1,
-                        nativeAmount: a['native_amount'] as int,
-                      );
-                      info.pubkey = a['pubkey'] as String;
-                      return info;
-                    })
-                .toList();
-            _assets = assets
-                .map((a) => AssetInfo(
-                      id: a['id'] as String,
-                      interface: a['interface'] as String,
-                      name: a['name'] as String,
-                      symbol: a['symbol'] as String,
-                      balance: a['balance'] as String,
-                      decimals: a['decimals'] as int,
-                      burnt: a['burnt'] == 1,
-                      compressed: a['compressed'] == 1,
-                    ))
-                .toList();
-            _txs = txs
-                .map((t) => TxInfo(
-                      signature: t['signature'] as String,
-                      slot: t['slot'] as int,
-                      err: t['err'],
-                      blockTime: t['block_time'] as int,
-                      memo: t['memo'] as String?,
-                    ))
-                .toList();
-          });
-        }
-      } catch (e) {
-        log('Failed to load vault data: $e');
+    if (mounted) setState(() {});
+  }
+
+  /// Fills the vault from the local cache for [addr].
+  ///
+  /// Called only once the wallet address is known. This used to sit inline in
+  /// [_loadPrefs] behind `_walletAddress != null` — but initState started
+  /// _loadPrefs and _restoreWallet in parallel, so whenever prefs won the race
+  /// the address was still null and the whole cache read was skipped. Nothing
+  /// else loaded it on startup, which is why the vault came up empty at random.
+  Future<void> _loadCachedVault(String addr) async {
+    try {
+      final accounts = await StatsDb.instance.loadVaultTokenAccounts(addr);
+      final assets = await StatsDb.instance.loadVaultAssets(addr);
+      final txs = await StatsDb.instance.loadVaultTxs(addr);
+      if (mounted) {
+        setState(() {
+          _tokenAccounts = accounts
+              .map((a) {
+                    final info = TokenAccountInfo(
+                      mint: a['mint'] as String,
+                      owner: a['owner'] as String,
+                      amount: a['amount'] as int,
+                      delegate: a['delegate'] as String?,
+                      state: a['state'] as int,
+                      delegatedAmount: a['delegated_amount'] as int,
+                      closeAuthority: a['close_authority'] as String?,
+                      isNative: a['is_native'] == 1,
+                      nativeAmount: a['native_amount'] as int,
+                    );
+                    info.pubkey = a['pubkey'] as String;
+                    return info;
+                  })
+              .toList();
+          _assets = assets
+              .map((a) => AssetInfo(
+                    id: a['id'] as String,
+                    interface: a['interface'] as String,
+                    name: a['name'] as String,
+                    symbol: a['symbol'] as String,
+                    balance: a['balance'] as String,
+                    decimals: a['decimals'] as int,
+                    burnt: a['burnt'] == 1,
+                    compressed: a['compressed'] == 1,
+                  ))
+              .toList();
+          _txs = txs
+              .map((t) => TxInfo(
+                    signature: t['signature'] as String,
+                    slot: t['slot'] as int,
+                    err: t['err'],
+                    blockTime: t['block_time'] as int,
+                    memo: t['memo'] as String?,
+                  ))
+              .toList();
+        });
       }
+    } catch (e) {
+      log('Failed to load cached vault: $e');
+      // Surfaced rather than logged: a silent cache failure is indistinguishable
+      // from an empty wallet, which is exactly how this went unnoticed.
+      if (mounted) setState(() => _vaultError = 'CACHE READ FAILED: $e');
     }
     if (mounted) setState(() {});
   }
@@ -492,7 +571,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   /// Pull-to-refresh for the tabs. Also re-checks monitoring health, since a
   /// pull is exactly when someone is asking whether the data is current.
-  /// Writes the usage table for the current period to Downloads as CSV.
+  /// Writes the usage table for the current period out as CSV.
   ///
   /// Exports what is on screen, including the drain estimate, so a row in the
   /// file can be traced back to a row in the app. Until this existed there was
@@ -534,12 +613,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .toIso8601String()
         .substring(0, 19)
         .replaceAll(RegExp(r'[:T]'), '-');
-    final saved = await StatsService.exportToDownloads(
+    final export = await StatsService.exportCsv(
       'pipstats-usage-$stamp.csv',
       csv,
     );
     if (!mounted) return;
-    _toast(saved == null ? l10n.exportFailed : l10n.exportDone(saved));
+    _toast(switch (export.status) {
+      ExportStatus.ok => l10n.exportDone(export.name ?? ''),
+      ExportStatus.cancelled => l10n.exportCancelled,
+      ExportStatus.failed => l10n.exportFailed,
+    });
   }
 
   void _toast(String message) {
@@ -857,6 +940,81 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     Future.delayed(const Duration(seconds: 1), _checkAccess);
   }
 
+  /// Explains what Usage access is for before sending the user to grant it.
+  ///
+  /// Usage access is not a runtime permission — there is no system prompt that
+  /// states a purpose, so the settings screen on its own tells the user
+  /// nothing about what the app will read or where it goes. This dialog is
+  /// that disclosure, and it is why it must come before [_openUsageSettings]
+  /// rather than after.
+  Future<void> _showUsageDisclosure() async {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        title: Text(
+          l10n.usageDisclosureTitle,
+          style: TextStyle(color: ds.primary, fontSize: PipText.heading, letterSpacing: 1),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final para in [
+                l10n.usageDisclosureWhat,
+                l10n.usageDisclosureWhy,
+                l10n.usageDisclosureWhere,
+                l10n.usageDisclosureService,
+                l10n.usageDisclosureRevoke,
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    para,
+                    style: TextStyle(
+                      color: ds.primary,
+                      fontSize: PipText.reading,
+                      height: 1.5,
+                    ),
+                  ),
+                ),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _openLink(_permissionsUrl),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    l10n.usageDisclosureMore,
+                    style: TextStyle(
+                      color: ds.primary,
+                      fontSize: PipText.reading,
+                      decoration: TextDecoration.underline,
+                      decorationColor: ds.primary,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(l10n.usageDisclosureContinue, style: TextStyle(color: ds.primary)),
+          ),
+        ],
+      ),
+    );
+    if (proceed == true) await _openUsageSettings();
+  }
+
   void _cycleTheme() {
     DeviceStatsScope.of(context)
         .onThemeChanged(DeviceStatsScope.of(context).theme);
@@ -1000,7 +1158,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 if (!_hasAccess) _accessHint(),
                                 if (_hasAccess) _sortHeader(),
                                 if (_hasAccess) _periodDrainLine(),
-                                if (_hasAccess && _rows.isNotEmpty)
+                                if (_hasAccess && _rows.isNotEmpty && _searchOpen)
                                   _searchField(),
                               ],
                             ),
@@ -1144,6 +1302,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       child: GestureDetector(
         onTap: () {
           setState(() => _tab = idx);
+          if (idx == 1) _maybeRefreshVault();
           StatsDb.instance.setMeta('tab', '$idx');
         },
         child: Container(
@@ -2127,7 +2286,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _loadVaultData();
   }
 
-  Future<void> _loadVaultData() async {
+  /// Re-reads the wallet from the chain.
+  ///
+  /// [background] marks the scans nobody asked for — startup, the interval
+  /// timer, coming back to the app. Those must not erase what is on screen:
+  /// the free public RPC is rate limited and answers a throttled request with
+  /// an empty result rather than an error, and a wallet that had eight tokens
+  /// a minute ago has almost certainly not been emptied. A scan the user
+  /// actually asked for (RESCAN, pull-to-refresh) is authoritative and writes
+  /// whatever came back, empty included, so a genuinely emptied wallet can
+  /// still be seen.
+  Future<void> _loadVaultData({bool background = false}) async {
     final l10n = AppLocalizations.of(context);
     final addr = _walletAddress;
     if (addr == null) return;
@@ -2156,9 +2325,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _solLamports = lamports;
         _totalUsd = totalUsd;
         _pricesUnavailable = prices == null;
-        _tokenAccounts = accounts;
-        _assets = assets;
-        _txs = txs;
+        if (!background || accounts.isNotEmpty) _tokenAccounts = accounts;
+        if (!background || assets.isNotEmpty) _assets = assets;
+        if (!background || txs.isNotEmpty) _txs = txs;
         _vaultBusy = false;
       });
       // Persist vault data to database.
@@ -2217,6 +2386,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         });
       } catch (e) {
         log('Failed to save vault data: $e');
+        if (mounted) setState(() => _vaultError = 'CACHE WRITE FAILED: $e');
       }
       // Enrich first several transactions with fee/program/transfer details.
       final details = <String, TxDetail>{};
@@ -2302,36 +2472,19 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Future<void> _restoreWallet() async {
     final auth = await WalletAuthService.instance.lastKnownWallet();
-    if (auth != null && mounted) {
-      setState(() {
-        _walletAddress = auth.address;
-        _walletLabel = auth.accountLabel;
-      });
-      unawaited(_scanApprovals());
-    }
+    if (auth == null || !mounted) return;
+    setState(() {
+      _walletAddress = auth.address;
+      _walletLabel = auth.accountLabel;
+    });
+    // Cache first so the vault has something to show immediately, then a full
+    // refresh in the background. _loadVaultData already scans delegates among
+    // its four calls, so the separate lighter scan that used to run here is
+    // redundant — and it replaced the whole token-account list with delegates
+    // only, wiping what the cache had just restored.
+    await _loadCachedVault(auth.address);
   }
 
-  /// Scans for active token approvals so the home screen can warn about them.
-  ///
-  /// Deliberately lighter than [_loadVaultData], which makes four calls: the
-  /// alarm only needs the delegate scan, and it has to run without the user
-  /// opening the vault. Until this existed, approvals were only discovered by
-  /// someone who already went looking — which is the one case where a warning
-  /// is not needed.
-  ///
-  /// Failures are silent: an unreachable RPC at launch is not worth an error
-  /// banner, and the vault reports properly when opened.
-  Future<void> _scanApprovals() async {
-    final addr = _walletAddress;
-    if (addr == null) return;
-    try {
-      final accounts = await SolScanService.instance.scanDelegates(addr);
-      if (!mounted) return;
-      setState(() => _tokenAccounts = accounts);
-    } catch (e) {
-      log('_scanApprovals error: $e');
-    }
-  }
 
   // ---- Monitoring health ----
 
@@ -2528,9 +2681,62 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _refreshMonitoringHealth();
   }
 
+  /// Explains the ongoing notification before asking for permission to show it.
+  ///
+  /// Android's prompt says only "Allow notifications?", which for an app like
+  /// this reads as marketing. The notification is in fact the sole indicator
+  /// that background collection is running, and that is worth one sentence
+  /// before the system asks.
   Future<void> _requestNotifications() async {
+    final l10n = AppLocalizations.of(context);
+    final proceed = await _showRationale(
+      l10n.onboardNotifHeading,
+      l10n.onboardNotifBody,
+      l10n.onboardAllow,
+    );
+    if (proceed != true) return;
     await StatsService.requestNotificationPermission();
     await _refreshMonitoringHealth();
+  }
+
+  /// Small confirm sheet used before a system permission prompt.
+  Future<bool?> _showRationale(String title, String body, String confirm) {
+    final ds = context.ds;
+    final l10n = AppLocalizations.of(context);
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: ds.bg,
+        title: Text(
+          title,
+          style: TextStyle(
+            color: ds.primary,
+            fontSize: PipText.heading,
+            letterSpacing: 1,
+          ),
+        ),
+        content: SingleChildScrollView(
+          child: Text(
+            body,
+            style: TextStyle(
+              color: ds.primary,
+              fontSize: PipText.reading,
+              height: 1.5,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(l10n.cancel, style: TextStyle(color: ds.dim)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(confirm, style: TextStyle(color: ds.primary)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _requestBatteryExemption() async {
@@ -2735,7 +2941,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             style: TextStyle(color: ds.dim, fontSize: PipText.heading),
           ),
           SizedBox(height: 10),
-          _pipboyButton(l10n.grantAccess, _openUsageSettings),
+          _pipboyButton(l10n.grantAccess, _showUsageDisclosure),
         ],
       ),
     );
@@ -2885,6 +3091,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       padding: EdgeInsets.fromLTRB(12, 8, 12, 0),
       child: TextField(
         controller: _searchController,
+        focusNode: _searchFocus,
         onChanged: (v) => setState(() => _appQuery = v),
         style: TextStyle(color: ds.primary, fontSize: PipText.value),
         cursorColor: ds.primary,
@@ -2905,6 +3112,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: () {
                     _searchController.clear();
                     setState(() => _appQuery = '');
+                    _searchFocus.requestFocus();
                   },
                 ),
           enabledBorder: OutlineInputBorder(
@@ -2932,10 +3140,46 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             style: TextStyle(color: ds.dim, fontSize: PipText.heading, letterSpacing: 1),
           ),
           Spacer(),
+          if (_rows.isNotEmpty) ...[
+            _searchToggle(ds, l10n),
+            SizedBox(width: 14),
+          ],
           _sortLabel(l10n.sortTime, SortKey.time),
           SizedBox(width: 14),
           _sortLabel(l10n.sortLaunch, SortKey.launches),
         ],
+      ),
+    );
+  }
+
+  /// Shows/hides the app filter.
+  ///
+  /// Collapsing also clears the query — a hidden filter still narrowing the
+  /// list would look like missing data with no visible cause.
+  Widget _searchToggle(DeviceStatsColors ds, AppLocalizations l10n) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        setState(() {
+          _searchOpen = !_searchOpen;
+          if (!_searchOpen) {
+            _searchController.clear();
+            _appQuery = '';
+            _searchFocus.unfocus();
+          }
+        });
+        if (_searchOpen) {
+          _searchFocus.requestFocus();
+        }
+      },
+      child: Semantics(
+        label: l10n.searchHint,
+        button: true,
+        child: Icon(
+          _searchOpen ? Icons.close : Icons.search,
+          size: 20,
+          color: _searchOpen || _appQuery.isNotEmpty ? ds.primary : ds.dim,
+        ),
       ),
     );
   }
@@ -3249,27 +3493,45 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       padding: EdgeInsets.all(12),
       children: [
         _infoSection(ds, l10n, l10n.aboutApp, {
-          'version': l10n.appVersion('1.1.0'),
+          'version': l10n.appVersion('1.1.1'),
           'description': l10n.appDescription,
         }),
         SizedBox(height: 12),
         _infoSection(ds, l10n, 'LEGAL', {
+          'setup': l10n.onboardReopen,
           'terms': l10n.termsOfService,
           'privacy': l10n.privacyPolicy,
         }, onTap: (key) {
+          if (key == 'setup') _showOnboarding();
           if (key == 'terms') _showTerms();
           if (key == 'privacy') _showPrivacy();
         }),
         SizedBox(height: 12),
-        _infoSection(ds, l10n, 'LINKS', {
-          'website': 'https://pipstats.pages.dev',
-          'github': 'https://github.com/ShevchukIhor/PipStats',
-          'terms_url': 'https://pipstats.pages.dev/terms',
-          'privacy_url': 'https://pipstats.pages.dev/privacy',
-        }),
+        _infoSection(ds, l10n, 'LINKS', const {
+          'website': _siteUrl,
+          'permissions': _permissionsUrl,
+          'github': _githubUrl,
+          'terms': _termsUrl,
+          'privacy': _privacyUrl,
+        }, linkKeys: const {'website', 'permissions', 'github', 'terms', 'privacy'}),
       ],
       ),
     );
+  }
+
+  /// Reopens the first-run guide.
+  ///
+  /// Someone who tapped LATER through onboarding has no other way back to the
+  /// explanation, and a reviewer should not have to reinstall to see it.
+  Future<void> _showOnboarding() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (ctx) => Onboarding(onDone: () => Navigator.pop(ctx)),
+      ),
+    );
+    if (!mounted) return;
+    await _checkAccess();
+    await _refreshMonitoringHealth();
   }
 
   void _showTerms() {
@@ -3293,16 +3555,25 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Opens the tip dialog, connected wallet or not.
+  ///
+  /// Sending already raises Seed Vault, so demanding a connection first was an
+  /// extra step that bought nothing: the wallet authorises inside the flow and
+  /// the address it returns is adopted here.
   Future<void> _showTipModal() async {
-    final l10n = AppLocalizations.of(context);
-    if (_walletAddress == null) {
-      _showSnack(l10n.tipNoWallet);
-      return;
-    }
-
     await showDialog<void>(
       context: context,
-      builder: (ctx) => TipWidget(walletAddress: _walletAddress!),
+      builder: (ctx) => TipWidget(
+        walletAddress: _walletAddress,
+        onAuthorized: (auth) {
+          if (!mounted) return;
+          setState(() {
+            _walletAddress = auth.address;
+            _walletLabel = auth.accountLabel;
+          });
+          unawaited(_loadVaultData());
+        },
+      ),
     );
   }
 
@@ -3316,8 +3587,49 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  /// Copy affordance for a link row: its own 36x36 target, right of the value.
+  Widget _copyButton(DeviceStatsColors ds, String value) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _copyLink(value),
+      child: SizedBox(
+        width: 36,
+        height: 36,
+        child: Icon(Icons.copy, size: 16, color: ds.dim),
+      ),
+    );
+  }
+
+  Future<void> _openLink(String url) async {
+    final l10n = AppLocalizations.of(context);
+    final opened = await StatsService.openUrl(url);
+    if (!mounted) return;
+    // No browser, or the intent was refused: copying is the next best thing
+    // we can do, rather than leaving the tap with no visible effect.
+    if (!opened) {
+      await Clipboard.setData(ClipboardData(text: url));
+      if (!mounted) return;
+      _showSnack(l10n.linkOpenFailed);
+    }
+  }
+
+  Future<void> _copyLink(String url) async {
+    final l10n = AppLocalizations.of(context);
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    _showSnack(l10n.linkCopied);
+  }
+
   // ---- Info section helper (used by SYSINFO and INFO tabs) ----
-  Widget _infoSection(DeviceStatsColors ds, AppLocalizations l10n, String title, Map map, {void Function(String)? onTap}) {
+  /// Renders a titled block of key/value rows.
+  ///
+  /// Keys listed in [linkKeys] are treated as https addresses: the value opens
+  /// the browser and gains a copy button of its own. The button is a sibling of
+  /// the value rather than an overlay on it, so the two tap targets cannot
+  /// overlap — tapping the address never copies, tapping the icon never
+  /// navigates. Rows without [linkKeys] render exactly as before, which is what
+  /// keeps the SYSINFO tab unchanged.
+  Widget _infoSection(DeviceStatsColors ds, AppLocalizations l10n, String title, Map map, {void Function(String)? onTap, Set<String>? linkKeys}) {
     if (map.isEmpty) return const SizedBox.shrink();
     final widgets = <Widget>[
       Text(
@@ -3333,6 +3645,26 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     ];
     map.forEach((key, value) {
       final valStr = _formatValue(key, value);
+      final isLink = linkKeys != null && linkKeys.contains(key);
+
+      Widget valueText = Text(
+        valStr,
+        style: TextStyle(
+          color: ds.primary,
+          fontSize: PipText.value,
+          shadows: ds.crt ? pipGlow(ds.primary, blur: 5) : null,
+        ),
+        textAlign: TextAlign.right,
+        overflow: TextOverflow.ellipsis,
+      );
+      if (isLink) {
+        valueText = GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _openLink(valStr),
+          child: valueText,
+        );
+      }
+
       final rowWidget = Container(
         margin: EdgeInsets.only(bottom: 4),
         padding: EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -3341,7 +3673,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           border: Border.all(color: ds.dark, width: 1),
         ),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: isLink ? CrossAxisAlignment.center : CrossAxisAlignment.start,
           children: [
             Expanded(
               flex: 2,
@@ -3351,19 +3683,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
             SizedBox(width: 12),
-            Expanded(
-              flex: 3,
-              child: Text(
-                valStr,
-                style: TextStyle(
-                  color: ds.primary,
-                  fontSize: PipText.value,
-                  shadows: ds.crt ? pipGlow(ds.primary, blur: 5) : null,
-                ),
-                textAlign: TextAlign.right,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
+            // Links get the wider share: an address ellipsised in the middle is
+            // unreadable, and there is no unit to keep short.
+            Expanded(flex: isLink ? 5 : 3, child: valueText),
+            if (isLink) _copyButton(ds, valStr),
           ],
         ),
       );
