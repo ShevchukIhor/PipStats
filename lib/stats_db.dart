@@ -432,32 +432,50 @@ class StatsDb {
       whereArgs: [walletAddress],
     );
     final detailMap = {for (var d in details) d['signature'] as String: d};
-    for (var t in txs) {
-      final sig = t['signature'] as String;
-      if (detailMap.containsKey(sig)) {
-        final td = detailMap[sig]!;
-        t['feeLamports'] = td['fee_lamports'];
-        t['programs'] = (td['programs'] as String).split(',');
-        t['transfers'] = (td['transfers'] as String).split(';').map((t) {
-          final parts = t.split('|');
-          return {
-            'mint': parts[0],
-            'amount': parts[1],
-            'destination': parts[2],
-            'source': parts[3],
-          };
-        }).toList();
-        t['solTransfers'] = (td['sol_transfers'] as String).split(';').map((t) {
-          final parts = t.split('|');
-          return {
-            'destination': parts[0],
-            'source': parts[1],
-            'lamports': int.parse(parts[2]),
-          };
-        }).toList();
+    // Copy each row before enriching it: sqflite hands back read-only
+    // QueryRows, and writing into one throws "Unsupported operation:
+    // read-only". That exception was swallowed by the caller's catch, so every
+    // cached vault read failed silently and the tab came up empty.
+    final out = <Map<String, Object?>>[];
+    for (final t in txs) {
+      final row = Map<String, Object?>.from(t);
+      final td = detailMap[row['signature'] as String];
+      if (td != null) {
+        row['feeLamports'] = td['fee_lamports'];
+        row['programs'] = _splitList(td['programs'], ',');
+        row['transfers'] = [
+          for (final e in _splitList(td['transfers'], ';'))
+            if (e.split('|') case [final mint, final amount, final dest, final src])
+              {
+                'mint': mint,
+                'amount': amount,
+                'destination': dest,
+                'source': src,
+              },
+        ];
+        row['solTransfers'] = [
+          for (final e in _splitList(td['sol_transfers'], ';'))
+            if (e.split('|') case [final dest, final src, final lamports])
+              {
+                'destination': dest,
+                'source': src,
+                'lamports': int.tryParse(lamports) ?? 0,
+              },
+        ];
       }
+      out.add(row);
     }
-    return txs;
+    return out;
+  }
+
+  /// Splits a serialised list field.
+  ///
+  /// An empty list is stored as an empty string, and `''.split(sep)` yields
+  /// `['']` rather than `[]` — parsing that one bogus entry is what threw
+  /// RangeError on every transaction that moved no tokens.
+  static List<String> _splitList(Object? value, String sep) {
+    final s = value is String ? value : '';
+    return s.isEmpty ? const <String>[] : s.split(sep);
   }
 
   /// Delete all vault data for a wallet address.
