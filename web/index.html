@@ -38,6 +38,7 @@
       <ul>
         <li><a href="#features">FEATURES</a></li>
         <li><a href="#download">DOWNLOAD</a></li>
+        <li><a href="permissions.html">PERMISSIONS</a></li>
         <li><a href="terms.html">TERMS</a></li>
         <li><a href="privacy.html">PRIVACY</a></li>
       </ul>
@@ -49,7 +50,7 @@
       <h1>PIPSTATS</h1>
       <p class="sub">LOCAL DEVICE STATISTICS</p>
       <p class="tag">NO CLOUD &bull; NO TRACKING &bull; SEED VAULT READY</p>
-      <div class="badge">VERSION 1.1.0 &bull; ANDROID 8.0+ (API 26) &bull; BUILT FOR SOLANA MOBILE</div>
+      <div class="badge">VERSION 1.1.1 &bull; ANDROID 10+ (API 29) &bull; BUILT FOR SOLANA MOBILE</div>
     </section>
 
     <section id="features" class="wrap">
@@ -73,8 +74,8 @@
     <section id="download" class="wrap">
       <h2 class="section-title">[ DOWNLOAD ]</h2>
       <div class="download">
-        <a class="btn primary" href="https://github.com/ShevchukIhor/PipStats/releases/download/v1.1.0/v1.1.0.apk">
-          <span class="lbl"><span class="t">DOWNLOAD APK (DIRECT)</span><span class="s">v1.1.0 &bull; Android 8+</span></span>
+        <a class="btn primary" href="https://github.com/ShevchukIhor/PipStats/releases/download/v1.1.1/v1.1.1.apk">
+          <span class="lbl"><span class="t">DOWNLOAD APK (DIRECT)</span><span class="s">v1.1.1 &bull; Android 10+</span></span>
           <span class="arr">&#9656;</span>
         </a>
         <a class="btn" href="solanadappstore://details?id=com.pipstats.app">
@@ -86,24 +87,65 @@
           <span class="arr">&#9656;</span>
         </a>
       </div>
+      <p class="sideload-note">Installing the APK directly? Android marks such installs
+      as sideloaded and blocks Usage access until you allow it once:
+      <em>Settings &rsaquo; Apps &rsaquo; PipStats &rsaquo; &#8942; &rsaquo; Allow restricted
+      settings</em>. The app walks you through it, and
+      <a href="permissions.html">the permissions page</a> has the full steps. Installing
+      from the dApp Store avoids it.</p>
       <div class="legal-links">
-        <a href="terms.html">TERMS OF SERVICE</a><span>|</span><a href="privacy.html">PRIVACY POLICY</a>
+        <a href="permissions.html">PERMISSIONS</a><span>|</span><a href="terms.html">TERMS OF SERVICE</a><span>|</span><a href="privacy.html">PRIVACY POLICY</a>
       </div>
     </section>
 
     <footer class="wrap">
       <div class="links">
         <a href="https://github.com/ShevchukIhor/PipStats">GITHUB</a><span>|</span>
+        <a href="permissions.html">PERMISSIONS</a><span>|</span>
         <a href="terms.html">TERMS</a><span>|</span>
         <a href="privacy.html">PRIVACY</a>
       </div>
       <div class="donate">
         <div class="ttl">SUPPORT DEVELOPMENT (SKR)</div>
-        <code>5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm</code>
-        <div class="dom"><u>pip-boy.skr</u></div>
+        <button type="button" class="copybtn" data-copy="5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm">
+          <code>5PpUJGRhM3FJN24mQD5wnKn6xSZLmA1ahPmouZvUFCHm</code><span class="ind" aria-hidden="true">COPY</span>
+        </button>
+        <button type="button" class="copybtn dom" data-copy="pip-boy.skr">
+          <code>pip-boy.skr</code><span class="ind" aria-hidden="true">COPY</span>
+        </button>
       </div>
       <p class="copy">2026 PIPSTATS &bull; NO CLOUD &bull; NO TRACKING &bull; BUILT FOR SOLANA MOBILE</p>
     </footer>
   </main>
+  <script>
+    document.querySelectorAll('.donate .copybtn').forEach(function (btn) {
+      var ind = btn.querySelector('.ind');
+      var revert;
+      btn.addEventListener('click', function () {
+        var text = btn.dataset.copy;
+        var done = function (ok) {
+          ind.textContent = ok ? 'COPIED' : 'SELECT & COPY';
+          btn.classList.toggle('ok', ok);
+          clearTimeout(revert);
+          revert = setTimeout(function () {
+            ind.textContent = 'COPY';
+            btn.classList.remove('ok');
+          }, 1600);
+        };
+        // clipboard.writeText needs a secure context; fall back to selecting
+        // the text so the button still does something useful over plain http.
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+        } else {
+          var r = document.createRange();
+          r.selectNodeContents(btn.querySelector('code'));
+          var sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(r);
+          done(false);
+        }
+      });
+    });
+  </script>
 </body>
 </html>

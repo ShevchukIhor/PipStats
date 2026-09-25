@@ -1,4 +1,4 @@
-/* PipStats landing — Pip-Boy / CRT terminal theme */
+/* PipStats landing — CRT terminal theme */
 :root {
   --primary: #00ff00;
   --dim: #00b84c;
@@ -154,7 +154,36 @@ section { padding: 40px 0; border-top: 1px solid var(--dark); }
 }
 .donate .ttl { color: var(--battery); letter-spacing: 2px; font-size: 15px; margin-bottom: 8px; }
 .donate code { color: var(--dim); word-break: break-all; user-select: all; font-size: 15px; }
-.donate .dom { color: var(--battery); }
+.donate .dom code { color: var(--battery); text-decoration: underline; }
+
+/* Each value is its own button: tapping anywhere on the row copies it, and
+   the COPY label doubles as the confirmation, so no toast is needed. */
+.donate .copybtn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  margin: 0 0 4px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+}
+.donate .copybtn:hover, .donate .copybtn:focus-visible {
+  border-color: rgba(255,179,0,0.4);
+  outline: none;
+}
+.donate .copybtn .ind {
+  margin-left: auto;
+  flex: none;
+  color: var(--faint);
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+.donate .copybtn.ok .ind { color: var(--battery); }
 
 /* Footer */
 footer { border-top: 1px solid var(--dark); padding: 24px 0 40px; text-align: center; }
@@ -177,3 +206,85 @@ footer .copy { color: var(--faint); font-size: 13px; letter-spacing: 2px; margin
   .nav { flex-direction: column; align-items: flex-start; }
   .hero h1 { letter-spacing: 6px; }
 }
+/* ---- Permissions table ---- */
+.perms { width: 100%; border-collapse: collapse; margin: 12px 0 8px; }
+.perms th, .perms td {
+  border: 1px solid var(--dark);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1.5;
+}
+.perms th { color: var(--primary); letter-spacing: 2px; font-size: 15px; }
+.perms code { color: var(--primary); word-break: break-word; font-size: 15px; }
+.perms .opt { color: var(--faint); letter-spacing: 1px; white-space: nowrap; }
+
+/* Stack into labelled rows once a three-column grid stops fitting. */
+@media (max-width: 680px) {
+  .perms thead { position: absolute; left: -9999px; }
+  .perms tr { display: block; border: 1px solid var(--dark); margin-bottom: 12px; }
+  .perms td { display: block; border: 0; border-top: 1px solid var(--dark); }
+  .perms tr td:first-child { border-top: 0; }
+  .perms td::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--faint);
+    letter-spacing: 2px;
+    font-size: 13px;
+    margin-bottom: 4px;
+  }
+}
+
+.steps { counter-reset: step; }
+.steps .step {
+  border: 1px solid var(--dark);
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+.steps .step h3 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  letter-spacing: 2px;
+  color: var(--primary);
+}
+.steps .step .path {
+  color: var(--primary);
+  font-size: 16px;
+  letter-spacing: 1px;
+  word-break: break-word;
+  display: block;
+  margin: 8px 0;
+}
+.steps .step .miss { color: var(--faint); font-size: 15px; line-height: 1.55; }
+
+/* The restricted-settings sub-section inside a step. */
+.steps .step h4 {
+  margin: 20px 0 6px;
+  font-size: 17px;
+  letter-spacing: 2px;
+  color: var(--battery);
+}
+.steps .step ol { padding-left: 22px; margin: 8px 0; }
+.steps .step ol li {
+  color: var(--dim);
+  line-height: 1.6;
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+.steps .step em { color: var(--primary); font-style: normal; }
+.steps .step strong { color: var(--primary); }
+
+.sideload-note {
+  max-width: 620px;
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255,179,0,0.4);
+  background: var(--panel);
+  color: var(--dim);
+  font-size: 16px;
+  line-height: 1.55;
+}
+.sideload-note em { color: var(--battery); font-style: normal; }
+.sideload-note a { color: var(--primary); text-decoration: underline; }
